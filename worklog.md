@@ -63,3 +63,20 @@ Stage Summary:
 - VERDICT TECHNIQUE: API Sofascore protégée par Cloudflare Turnstile → inaccessible depuis un serveur/datacenter. Accès réaliste uniquement depuis la machine de l'utilisateur avec sa vraie session navigateur (connecteur local ou extension)
 - Règles réelles du jeu 2026/27 documentées et sourcées (articles Sofascore août 2026)
 - Prochaine étape: obtenir de l'utilisateur nom de ligue/équipe/rivaux + préparer l'architecture connecteur local
+
+---
+Task ID: 2
+Agent: Main agent (Super Z)
+Task: Re-sourçage des règles Sofascore Fantasy après correction de l'utilisateur (2 transferts gratuits)
+
+Work Log:
+- Fetch Help Scout officiel (sofascore.helpscoutdocs.com): articles "fantasy football gameweeks" + "fantasy football tokens" (Tokens: Triple Captain x3pts 1/saison, Quick Fix, Rebuild Squad 2/saison, max 1 token/journée; GW Sofascore ≠ rounds officiels, bundles par date)
+- Navigation navigateur sur sofascore.com/news?category=fantasy → trouvé l'article officiel "Sofascore Fantasy 2026/27: What's New This Season" (Antonio Vuksanovic, 28 août 2026)
+- ARTICLE OFFICIEL LU EN ENTIER: transferts gratuits DOUBLÉS de 1 à 2 par journée, report cumulable max 5; Quick Fix passé à 2/saison; scoring 2026/27: dégagements 6=1pt, passes ne marquent plus pour les défenseurs, pénalité pertes de balle dès 4, punches/reprises GK dès 3, dribbles 3=1pt; 7 ligues live + UEFA (UCL ouverte 31 août)
+- Article "Premier League Fantasy Picks: Round 4" (11 sept 2026) lu en entier: squad réelle 15 joueurs 2GK/5DEF/5MID/3FWD à €99.4M/€100M avec prix réels et % de possession (Raya €6.6M 28.8%, Haaland €12M 75.5%, João Pedro €7.9M 38.2%, Szoboszlai €8M, Gakpo €7.7M, Rogers €7.4M CHELSEA, Ben White €5.2M, Gvardiol €6.8M, etc.); fixtures R4-8 réelles (Arsenal at Sunderland etc.)
+- Résultat réel récent: Manchester United 0-1 Manchester City (13 sept 2026, Haaland) — PL 2026/27 journée 4 en cours
+- ERREUR IDENTIFIÉE ET CORRIGÉE: mon "5 transferts gratuits" venait de l'article MLS Fantasy (autre compétition, autres règles). Le jeu PL Sofascore = 2 transferts gratuits/journée. L'utilisateur avait raison.
+
+Stage Summary:
+- Règles PL Sofascore Fantasy 2026/27 désormais 100% sourcées officiellement et correspondant à ce que dit l'utilisateur (2 transferts gratuits)
+- Données réelles Round 4 disponibles (joueurs, prix, ownership, fixtures) via articles officiels Sofascore (accessibles par navigateur, API toujours bloquée Cloudflare)
