@@ -99,3 +99,24 @@ Stage Summary:
 - LIVRABLES: /home/z/my-project/download/Cahier_des_Charges_Sofascore_Fantasy_Coach.docx (+ .pdf)
 - Contenu: règles officielles 2026/27 sourcées, classement réel ligue, marché réel J4, 24 points, constat Cloudflare + 3 options de collecte (connecteur local recommandé), critères d'acceptation
 - En attente utilisateur: D1 confirmation Vital_GDB, D2 mapping rivaux (frère/amis), D3 validation connecteur local, D4 capture écran « Mon équipe »
+
+---
+Task ID: 4
+Agent: Main agent (Super Z)
+Task: Réception et enregistrement de la capture « Mon équipe » R4 de l'utilisateur + réponse à sa question sur l'accès aux équipes des rivaux
+
+Work Log:
+- Lue la capture utilisateur (Screenshot_2026-09-13-21-45-07): onglet Mon équipe, R4 en cours, 21:45 le 13 sept 2026
+- Données extraites: historique R1 71 / R2 66 / R3 76, R4 en cours 71 pts; moyenne ligue 64,1; meilleur affiché 141; formation 1-3-5-2; XI: Raya 16, Guéhi 8, Justin (match NEW à venir), Khusanov 0, Tavernier 10, Rice 8, Szoboszlai 6, Ødegaard 6, Fernandes 4, Haaland 18 (C), Wissa (LEE en direct); banc Matthews 0, Lacroix 1, Akpom 0, Egan 1; 15 joueurs au total
+- Contrôle de cohérence: 71+66+76+71 = 284 = total EXACT de Vital_GDB au classement (capture 21:22, Task 3) → données réelles croisées et validées
+- CORRECTION définitive demandée par l'utilisateur: « je ne parlais pas de frère » → ligue = lui + 4 AMIS (nik Leroy, Donatien_10, Aziza FC, Zarés JR), aucun frère
+- Lecture corrigée: « NEW »/« LEE ⇌ » = abréviations d'adversaires (Newcastle/Leeds) avec matchs non comptés/en direct, PAS des marqueurs de nouveaux arrivants
+- Écart signalé à réconcilier: somme des titulaires lus (76) vs total affiché (71), différence de 5 pts — total affiché fait foi
+- Test en direct du canal « profil public » (agent-browser sur /user/profile/628e980cf3bea6fd72a7f555): la page charge mais retombe sur la page générique avec mur de connexion → même le profil public est inexploitable depuis le serveur
+- Archivé: /home/z/my-project/data/fantasy/equipe_capitaine_R4.json (équipe R4 + ligue + classement + notes de confiance par donnée)
+
+Stage Summary:
+- RÉPONSE À LA QUESTION UTILISATEUR: non, pas d'accès autonome possible aux équipes des rivaux (session obligatoire + Cloudflare) → rituel de captures par journée mis en place: (A) son équipe, (B) onglet Ligues, (C) compo de chaque rival si l'app le permet
+- REGISTRE COMPLET: règles officielles 2026/27 vérifiées + ligue réelle « Le fond de la classe » + 5 équipes nommées + XI réel R4 de Vital_GDB (4e, 284 pts, à 1 pt du dernier, 49 du leader nik Leroy)
+- Décisions D1, D2, D4 du cahier des charges désormais résolues; D3 (connecteur local) = option V2, la V1 fonctionne sur captures
+- Prochaine étape: construction de la V1 (moteur d'analyse + assistant IA branché sur ces données réelles, pipeline captures → JSON → analyse)

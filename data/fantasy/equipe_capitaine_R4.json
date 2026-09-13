@@ -1,0 +1,68 @@
+{
+  "meta": {
+    "jeu": "Sofascore Fantasy Premier League",
+    "saison": "2026/27",
+    "journee": 4,
+    "statut_journee": "en_cours",
+    "source": "capture ecran utilisateur 2026-09-13 21:45 (com.sofascore.results, onglet Mon equipe)",
+    "confiance": "lecture directe capture - noms et points certains, clubs de certains joueurs a confirmer (petits badges)"
+  },
+  "ligue": {
+    "nom": "Le fond de la classe",
+    "effectif": "5 managers: Vital_GDB (utilisateur) + 4 amis (nik Leroy, Donatien_10, Aziza FC, Zarés JR) - CORRIGE définitivement: AUCUN frère, l'utilisateur ne parlait pas de frère",
+    "classement_apres_R4": [
+      { "rang": 1, "equipe": "nik Leroy", "total": 333, "R4": 108 },
+      { "rang": 2, "equipe": "Donatien_10", "total": 318 },
+      { "rang": 3, "equipe": "Aziza FC", "total": 295 },
+      { "rang": 4, "equipe": "Vital_GDB", "total": 284, "utilisateur": true },
+      { "rang": 5, "equipe": "Zarés JR", "total": 283 }
+    ],
+    "source_classement": "capture utilisateur 2026-09-13 21:22 (onglet Ligues)",
+    "moyenne_R4_affichee": 64.1,
+    "meilleur_R4_affiche": 141,
+    "note_141": "nik Leroy était à 108 en R4 à 21:22; le 141 affiché à 21:45 = soit max global du jeu (tous managers Sofascore), soit ligue avec rivaux encore en direct - à confirmer à la clôture R4"
+  },
+  "mon_equipe": {
+    "nom": "Vital_GDB",
+    "historique_points": { "R1": 71, "R2": 66, "R3": 76 },
+    "R4_points_en_cours": 71,
+    "controle_coherence": "71+66+76+71 = 284 = total exact au classement (capture 21:22) - donnees reelles validées"
+  },
+  "composition_R4": {
+    "formation": "1-3-5-2",
+    "titulaires": [
+      { "poste": "G", "nom": "Raya", "club": "Arsenal", "points": 16, "club_confirme": true },
+      { "poste": "D", "nom": "Guéhi", "club": "Man City (badge bleu ciel, a confirmer)", "points": 8, "club_confirme": false },
+      { "poste": "D", "nom": "Justin", "club": "Leeds (badge jaune/bleu, a confirmer)", "points": null, "club_confirme": false, "marqueur": "NEW = abreviation adversaire Newcastle + icone domicile: match Leeds-Newcastle pas encore joué/en direct (PAS un marqueur nouvel arrivant - lecture corrigée)" },
+      { "poste": "D", "nom": "Khusanov", "club": "Man City", "points": 0, "club_confirme": true },
+      { "poste": "M", "nom": "Tavernier", "club": "Bournemouth (couleurs badge, a confirmer)", "points": 10, "club_confirme": false },
+      { "poste": "M", "nom": "Rice", "club": "Arsenal", "points": 8, "club_confirme": true },
+      { "poste": "M", "nom": "Szoboszlai", "club": "Liverpool", "points": 6, "club_confirme": true },
+      { "poste": "M", "nom": "Ødegaard", "club": "Arsenal", "points": 6, "club_confirme": true },
+      { "poste": "M", "nom": "Fernandes", "club": "Man United", "points": 4, "club_confirme": true },
+      { "poste": "A", "nom": "Haaland", "club": "Man City", "points": 18, "club_confirme": true, "capitaine": true },
+      { "poste": "A", "nom": "Wissa", "club": "Newcastle (badge, a confirmer)", "points": null, "club_confirme": false, "marqueur": "LEE <-> = match Newcastle vs Leeds, en direct/remplacement en cours" }
+    ],
+    "banc": [
+      { "poste": "G", "nom": "Matthews", "points": 0, "club": "Crystal Palace (a confirmer)" },
+      { "poste": "D", "nom": "Lacroix", "points": 1, "club": "a confirmer" },
+      { "poste": "A", "nom": "Akpom", "points": 0, "club": "a confirmer" },
+      { "poste": "D", "nom": "Egan", "points": 1, "club": "a confirmer" }
+    ],
+    "effectif_total": 15,
+    "observations": [
+      "Triple Arsenal: Raya + Rice + Ødegaard",
+      "Doublé City defense: Guéhi + Khusanov, plus Haaland en attaque (3 City au total)",
+      "Haaland capitaine a marqué 18 pts (derby Man United 0-1 Man City, verifié independamment)",
+      "Khusanov 0 pt = pas joué le match du derby (score affiché final)",
+      "Justin et Wissa: match Leeds-Newcastle non compté ou en direct au moment de la capture",
+      "ECART A VERIFIER: somme des titulaires lus = 76 pts (sans Justin/Wissa) vs total affiché 71 - écart de 5 pts: soit lecture de capture, soit points négatifs en direct (Wissa), soit notation spécifique; le total affiché 71 fait foi, réconcilier à la clôture R4",
+      "Boutons visibles: REMPLAÇANTS / TRANSFERTS (2 transferts gratuits par journée, regle 2026/27 verifiee)",
+      "Recrutement visible: doublé Leeds (Justin, Wissa si Newcastle-credits) et banc exotique (Matthews, Lacroix, Akpom, Egan) - profil gestionnaire qui cherche les différentiels"
+    ]
+  },
+  "verification_croisee": {
+    "derby_manchester": "Man United 0-1 Man City, but de Haaland, 2026-09-13 - coherente avec Fernandes 4 pts / Haaland 18 pts (C) / Khusanov 0",
+    "date_j4": "13 sept. 2026, capture prise 21:45 (heure locale telephone)"
+  }
+}
