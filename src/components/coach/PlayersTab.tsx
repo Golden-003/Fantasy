@@ -1,118 +1,148 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import type { PlayerRow } from '@/lib/coach/types'
-import { PositionBadge, StatusDot, TrendArrow, VerdictBadge, fmt } from './ui-helpers'
+import { Skeleton } from '@/components/ui/skeleton'
+import type { MarketTarget, Pos } from '@/lib/coach/types'
+import { ConfirmBadge, Own, PlayerAvatar, PosBadge, POS_LABEL, Price, SourceChip } from './ui-helpers'
+import { Search, Target } from 'lucide-react'
 
-type SortKey = 'projection' | 'form' | 'rating' | 'price' | 'fixtureScore' | 'ownership' | 'name'
+interface PlayerRow {
+  id: string
+  name: string
+  club: string
+  clubConfirmed: boolean
+  position: Pos
+  price: number | null
+  ownership: number | null
+  priceSource: string | null
+  formNote: string | null
+}
 
-export function PlayersTab({ players, onSelect }: { players: PlayerRow[]; onSelect: (id: string) => void }) {
+const FILTERS: Array<{ key: 'ALL' | Pos; label: string }> = [
+  { key: 'ALL', label: 'Tous' },
+  { key: 'G', label: 'Gardiens' },
+  { key: 'D', label: 'Défenseurs' },
+  { key: 'M', label: 'Milieux' },
+  { key: 'A', label: 'Attaquants' },
+]
+
+export default function PlayersTab() {
+  const [players, setPlayers] = useState<PlayerRow[] | null>(null)
+  const [targets, setTargets] = useState<MarketTarget[]>([])
+  const [filter, setFilter] = useState<'ALL' | Pos>('ALL')
   const [q, setQ] = useState('')
-  const [pos, setPos] = useState('ALL')
-  const [team, setTeam] = useState('ALL')
-  const [sort, setSort] = useState<SortKey>('projection')
 
-  const teams = useMemo(() => [...new Set(players.map((p) => p.teamShort))].sort(), [players])
+  useEffect(() => {
+    fetch('/api/coach/players')
+      .then((r) => r.json())
+      .then((d) => {
+        setPlayers(d.players ?? [])
+        setTargets(d.targets ?? [])
+      })
+      .catch(console.error)
+  }, [])
 
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase()
-    const out = players.filter((p) => {
-      if (pos !== 'ALL' && p.position !== pos) return false
-      if (team !== 'ALL' && p.teamShort !== team) return false
-      if (needle && !p.name.toLowerCase().includes(needle) && !p.teamName.toLowerCase().includes(needle)) return false
-      return true
-    })
-    out.sort((a, b) => {
-      if (sort === 'name') return a.name.localeCompare(b.name)
-      return (b[sort] as number) - (a[sort] as number)
-    })
-    return out
-  }, [players, q, pos, team, sort])
+  const shown = useMemo(() => {
+    return (players ?? []).filter(
+      (p) =>
+        (filter === 'ALL' || p.position === filter) &&
+        (q.trim() === '' || `${p.name} ${p.club}`.toLowerCase().includes(q.toLowerCase()))
+    )
+  }, [players, filter, q])
 
-  const headerBtn = (key: SortKey, label: string, extraCls = '') => (
-    <button
-      onClick={() => setSort(key)}
-      className={`text-[11px] font-semibold uppercase tracking-wide transition hover:text-emerald-300 ${sort === key ? 'text-emerald-400' : 'text-slate-400'} ${extraCls}`}
-    >
-      {label} {sort === key ? '▾' : ''}
-    </button>
-  )
+  if (!players) {
+    return (
+      <div className="space-y-4">
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-96 w-full" />
+      </div>
+    )
+  }
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Input placeholder="Rechercher un joueur…" value={q} onChange={(e) => setQ(e.target.value)} className="h-9 w-full max-w-xs border-slate-800 bg-slate-900/80 text-sm" />
-        <Select value={pos} onValueChange={setPos}>
-          <SelectTrigger className="h-9 w-[130px] border-slate-800 bg-slate-900/80 text-sm"><SelectValue placeholder="Poste" /></SelectTrigger>
-          <SelectContent className="border-slate-800 bg-slate-950 text-slate-200">
-            <SelectItem value="ALL">Tous postes</SelectItem>
-            <SelectItem value="GK">Gardiens</SelectItem>
-            <SelectItem value="DEF">Défenseurs</SelectItem>
-            <SelectItem value="MID">Milieux</SelectItem>
-            <SelectItem value="FWD">Attaquants</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={team} onValueChange={setTeam}>
-          <SelectTrigger className="h-9 w-[150px] border-slate-800 bg-slate-900/80 text-sm"><SelectValue placeholder="Équipe" /></SelectTrigger>
-          <SelectContent className="max-h-72 border-slate-800 bg-slate-950 text-slate-200">
-            <SelectItem value="ALL">Toutes équipes</SelectItem>
-            {teams.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <span className="ml-auto text-xs text-slate-500">{filtered.length} joueurs</span>
-      </div>
+    <div className="space-y-4">
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Target className="h-4 w-4 text-violet-300" /> Cibles marché sourcées — avant la clôture R5
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-2 sm:grid-cols-2">
+          {targets.slice(0, 6).map((t) => (
+            <div key={t.playerId} className="flex items-center gap-3 rounded-lg border border-border bg-zinc-900/40 p-2.5">
+              <PlayerAvatar name={t.name} size="sm" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-semibold">
+                  {t.name} <span className="text-xs font-normal text-zinc-500">{t.club} · <Price value={t.price} /></span>
+                </p>
+                <p className="truncate text-[11px] text-zinc-400">{t.rationale}{t.formNote ? ` · ${t.formNote}` : ''}</p>
+              </div>
+              <div className="text-right text-[11px] text-zinc-500">
+                <Own value={t.ownership} />
+              </div>
+            </div>
+          ))}
+          <p className="text-[11px] text-zinc-500 sm:col-span-2">
+            Prix et % issus de l’article officiel Sofascore du 11 sept 2026. Vérifie ton budget réel dans l’app (9 de tes 15 prix sont encore à confirmer) — 2 transferts gratuits disponibles.
+          </p>
+        </CardContent>
+      </Card>
 
-      <div className="max-h-[64vh] overflow-y-auto rounded-xl border border-slate-800">
-        <Table>
-          <TableHeader className="sticky top-0 z-10 bg-slate-900">
-            <TableRow className="border-slate-800 hover:bg-slate-900">
-              <TableHead>{headerBtn('name', 'Joueur')}</TableHead>
-              <TableHead className="hidden sm:table-cell">{headerBtn('price', 'Prix')}</TableHead>
-              <TableHead>{headerBtn('rating', 'Note')}</TableHead>
-              <TableHead>{headerBtn('form', 'Forme')}</TableHead>
-              <TableHead className="hidden md:table-cell">{headerBtn('fixtureScore', 'Calendrier')}</TableHead>
-              <TableHead>{headerBtn('projection', 'Proj. J')}</TableHead>
-              <TableHead className="hidden sm:table-cell">{headerBtn('ownership', 'Poss.')}</TableHead>
-              <TableHead>Verdict</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filtered.map((p) => (
-              <TableRow key={p.id} onClick={() => onSelect(p.id)} className="cursor-pointer border-slate-800/70 hover:bg-slate-900/70">
-                <TableCell>
-                  <div className="flex items-center gap-1.5">
-                    <StatusDot status={p.status} />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate text-sm font-medium text-slate-100">{p.name}</span>
-                        {p.ownedByMe && <span className="rounded bg-emerald-500/15 px-1 text-[9px] font-bold text-emerald-300" title="Dans ton équipe">MOI</span>}
-                        {p.ownedByRivals.length > 0 && <span className="rounded bg-orange-500/15 px-1 text-[9px] font-bold text-orange-300" title={`Possédé par ${p.ownedByRivals.join(', ')}`}>×{p.ownedByRivals.length}</span>}
-                      </div>
-                      <div className="flex items-center gap-1 text-[10px] text-slate-500">
-                        <PositionBadge pos={p.position} /> {p.teamShort} <TrendArrow trend={p.trend} />
-                      </div>
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="hidden text-sm text-slate-300 sm:table-cell">{fmt(p.price)}M</TableCell>
-                <TableCell className="text-sm text-slate-200">{fmt(p.rating)}</TableCell>
-                <TableCell className={`text-sm font-semibold ${p.form >= 7 ? 'text-emerald-400' : p.form < 6.4 ? 'text-amber-400' : 'text-slate-300'}`}>{fmt(p.form)}</TableCell>
-                <TableCell className="hidden md:table-cell">
-                  <span className={`text-sm ${p.fixtureScore >= 55 ? 'text-emerald-400' : p.fixtureScore <= 42 ? 'text-red-400' : 'text-slate-300'}`}>{Math.round(p.fixtureScore)}</span>
-                </TableCell>
-                <TableCell className={`text-sm font-bold ${p.projection >= 7 ? 'text-emerald-400' : p.projection >= 6 ? 'text-amber-300' : p.projection > 0 ? 'text-orange-300' : 'text-red-400'}`}>
-                  {p.status === 'INJURED' || p.status === 'SUSPENDED' ? '0,0' : fmt(p.projection)}
-                </TableCell>
-                <TableCell className="hidden text-xs text-slate-400 sm:table-cell">{fmt(p.ownership)}%</TableCell>
-                <TableCell><VerdictBadge verdict={p.verdict} compact /></TableCell>
-              </TableRow>
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">Base joueurs réelle — {players.length} joueurs tracés</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-[180px]">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-zinc-500" />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Rechercher un joueur ou un club…" className="pl-8" />
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {FILTERS.map((f) => (
+                <button
+                  key={f.key}
+                  onClick={() => setFilter(f.key)}
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition ${filter === f.key ? 'bg-violet-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="max-h-[480px] space-y-1.5 overflow-y-auto pr-1">
+            {shown.map((p) => (
+              <div key={p.id} className="flex items-center gap-3 rounded-lg border border-border/60 bg-zinc-900/30 p-2.5">
+                <PlayerAvatar name={p.name} size="sm" />
+                <div className="min-w-0 flex-1">
+                  <p className="flex items-center gap-1.5 truncate text-sm font-semibold">
+                    {p.name} <PosBadge pos={p.position} />
+                    {!p.clubConfirmed && <ConfirmBadge label="club ?" />}
+                  </p>
+                  <p className="truncate text-[11px] text-zinc-500">
+                    {p.club} · <POS_LABEL_POS pos={p.position} />{p.formNote ? ` · ${p.formNote}` : ''}
+                  </p>
+                </div>
+                <div className="flex flex-col items-end gap-0.5">
+                  <Price value={p.price} />
+                  <Own value={p.ownership} />
+                </div>
+              </div>
             ))}
-          </TableBody>
-        </Table>
-      </div>
+            {shown.length === 0 && <p className="py-6 text-center text-sm text-zinc-500">Aucun joueur ne correspond.</p>}
+          </div>
+          <div className="mt-3">
+            <SourceChip source="Article officiel Sofascore « Picks R4 » (11 sept 2026) + captures Vital_GDB" />
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
+}
+
+function POS_LABEL_POS({ pos }: { pos: Pos }) {
+  return <>{POS_LABEL[pos]}</>
 }

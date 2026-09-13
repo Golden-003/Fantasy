@@ -1,180 +1,128 @@
-// Types partagés entre le moteur (serveur) et l'UI (client)
-// Toutes les valeurs proviennent de l'API officielle Fantasy Premier League (réel).
+// Types partagés du moteur coach — Sofascore Fantasy V1
+export type Pos = 'G' | 'D' | 'M' | 'A'
+export type Difficulty = 'FACILE' | 'MOYEN' | 'DIFFICILE' | 'INCONNU'
 
-export type Verdict = 'GREEN' | 'YELLOW' | 'RED'
-export type Position = 'GK' | 'DEF' | 'MID' | 'FWD'
-export type PlayerStatus = 'FIT' | 'INJURED' | 'SUSPENDED' | 'DOUBTFUL'
-export type RotationRisk = 'LOW' | 'MEDIUM' | 'HIGH'
-export type Trend = 'UP' | 'DOWN' | 'STABLE'
-
-export interface LastMatch {
-  gw: number
-  oppShort: string
-  venue: 'H' | 'A'
-  rating: number // note dérivée du BPS réel FPL : 4 + bps/10 (max 10)
-  minutes: number
-  goals: number
-  assists: number
+export interface FixtureLite {
+  opponent: string
+  isHome: boolean
+  difficulty: Difficulty
+  note: string
 }
 
-// Statistiques réelles de saison (bootstrap FPL) — pas d'invention.
-export interface PlayerStats {
-  apps: number // apparitions = titularisations + entrées en jeu
-  minutes: number
-  starts: number
-  goals: number
-  assists: number
-  xg: number
-  xa: number
-  xgi: number
-  cleanSheets: number
-  saves: number
-  bonus: number
-  bps: number
-  tackles: number
-  cbi: number // dégagements + blocages + interceptions (FPL)
-  recoveries: number
-  yellow: number
-  red: number
-}
-
-export interface FixtureChip {
-  gw: number
-  opp: string
-  venue: 'H' | 'A'
-  difficulty: number // 1 facile → 5 très dur (FDR officielle FPL)
-}
-
-export interface PlayerRow {
-  id: string // id FPL réel (string pour l'UI)
-  fplId: number
-  name: string
-  teamId: string
-  teamShort: string
-  teamName: string
-  position: Position
-  price: number
-  ownership: number // % réel sélectionné par les managers FPL
-  status: PlayerStatus
-  injuryNote: string | null
-  rotationRisk: RotationRisk
-  trend: Trend
-  rating: number // = points par match (PPG réel FPL)
-  form: number // forme réelle FPL (moyenne points 5 dernières journées)
-  minutesPct: number
-  expectedMinutes: number // 0-1, estimation depuis les minutes réelles
-  epNext: number // points attendus officiels FPL pour la prochaine journée
-  stats: PlayerStats
-  last5: LastMatch[]
-  fixtures: FixtureChip[]
-  fixtureScore: number // 0-100, 5 prochaines journées
-  projection: number // Fantasy Score J+1 (moteur, explicable)
-  projection5: number // cumul projeté sur 5 journées
-  verdict: Verdict
-  reasons: string[]
-  ownedByMe: boolean
-  ownedByRivals: string[] // noms des rivaux qui le possèdent (réel)
-}
-
-export interface SquadEntry {
-  slot: number
-  isStarter: boolean
-  isCaptain: boolean
-  player: PlayerRow
-}
-
-export interface LiveNow {
-  gw: number
-  points: number // points réels accumulés par mon XI (multipliés capitaine inclus)
-  remaining: number // matchs de mon XI pas encore joués
-}
-
-export interface MyTeamOverview {
-  teamName: string
-  ownerName: string
-  bank: number
-  transfersLeft: number
-  transfersExact: boolean // true = valeur officielle (cookie), false = estimation moteur
-  totalPoints: number
-  rank: number
-  leagueSize: number // taille réelle de la ligue privée
-  squadScore: number // 0-100
-  teamValue: number
-  starters: SquadEntry[]
-  bench: SquadEntry[]
-  captainSuggestion: { name: string; projection: number } | null
-  projectedGwPoints: number
-  weakestStarters: { name: string; projection: number; verdict: Verdict; reason: string }[]
-}
-
-export interface SellCandidate {
-  player: PlayerRow
-  reason: string
-}
-
-export interface BuyCandidate {
-  player: PlayerRow
-  netGain: number | null
-  comparedTo: string | null
-  affordable: boolean
-  differential: boolean
-  justification: string
-}
-
-export interface TransferPlan {
-  bank: number
-  transfersLeft: number
-  sell: SellCandidate[]
-  buy: BuyCandidate[]
-}
-
-export type AlertSeverity = 'danger' | 'warning' | 'success' | 'info'
-export type AlertType = 'SQUAD_RISK' | 'OPPORTUNITY' | 'FORM' | 'UNDERPERF' | 'RIVAL_THREAT' | 'CAPTAIN'
-
-export interface AlertItem {
+export interface SquadPlayerView {
   id: string
-  type: AlertType
-  severity: AlertSeverity
+  name: string
+  club: string
+  clubConfirmed: boolean
+  position: Pos
+  role: 'TITULAIRE' | 'BANC'
+  captain: boolean
+  pointsR4: number | null
+  pointsNote: string | null
+  price: number | null
+  ownership: number | null
+  priceSource: string | null
+  formNote: string | null
+  fixtureR5: FixtureLite | null
+}
+
+export interface TeamView {
+  formation: string
+  starters: SquadPlayerView[]
+  bench: SquadPlayerView[]
+  knownSpend: number
+  knownPriceCount: number
+  unknownPriceCount: string[]
+  totals: { r1: number; r2: number; r3: number; r4: number; total: number }
+}
+
+export interface CaptainPick {
+  rank: number
+  playerId: string
+  name: string
+  club: string
+  position: Pos
+  fixture: string
+  difficulty: Difficulty
+  score: number
+  reasons: string[]
+}
+
+export interface TransferFlag {
+  playerId: string
+  name: string
+  kind: 'SURVEILLER' | 'GARDER' | 'DOUTE'
+  reason: string
+  source: string
+}
+
+export interface MarketTarget {
+  playerId: string
+  name: string
+  club: string
+  position: Pos
+  price: number
+  ownership: number
+  formNote: string | null
+  rationale: string
+}
+
+export interface Alert {
+  level: 'HOT' | 'WARN' | 'INFO'
   title: string
   detail: string
-  playerId?: string
+  source: string
 }
 
-export interface RivalAnalysis {
-  teamName: string
-  ownerName: string
-  totalPoints: number
-  squadScore: number
-  projectedGwPoints: number
-  threatLevel: 'HIGH' | 'MEDIUM' | 'LOW'
-  overlap: number
-  threats: { name: string; position: Position; teamShort: string; projection: number; price: number }[]
-  advice: string
-  squad: { name: string; position: Position; teamShort: string; isCaptain: boolean; projection: number; verdict: Verdict }[]
-}
-
-export interface LeagueData {
-  leagueName: string
-  myScore: number
-  standings: { rank: number; teamName: string; ownerName: string; isMine: boolean; totalPoints: number; squadScore: number; projectedGwPoints: number }[]
-  rivals: RivalAnalysis[]
-  differentials: PlayerRow[]
-}
-
-export interface TeamFixtureRow {
-  id: string
+export interface StandingRow {
+  rank: number
   name: string
-  short: string
-  fixtures: FixtureChip[]
-  fixtureScore: number
+  isUser: boolean
+  total: number | null
+  r4: number | null
+  r4Known: boolean
+  historyKnown: boolean
 }
 
-export interface OverviewPayload {
-  me: MyTeamOverview
-  alerts: AlertItem[]
-  transfers: TransferPlan
-  nextGw: number
-  seasonLabel: string
-  live: LiveNow | null
-  syncedAt: string
+export interface LeagueView {
+  name: string
+  season: string
+  standings: StandingRow[]
+  myRank: number
+  gapToLeader: number
+  gapToLast: number
+  leaderName: string
+  averageR4Displayed: number
+  bestR4Displayed: number
+  missingData: string[]
+}
+
+export interface FixtureView {
+  round: number
+  club: string
+  opponent: string
+  isHome: boolean
+  difficulty: Difficulty
+  note: string
+}
+
+export interface Overview {
+  leagueName: string
+  game: string
+  season: string
+  nextRound: number
+  nextRoundDate: string
+  myRank: number
+  myTotal: number
+  gapToLeader: number
+  leaderName: string
+  captainTop: CaptainPick | null
+  alerts: Alert[]
+  budget: { knownSpend: number; knownCount: number; unknownCount: number }
+  dataQuality: {
+    playersTracked: number
+    pricesSourced: number
+    fixturesSourced: number
+    dataEvents: number
+  }
 }

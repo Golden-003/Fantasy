@@ -120,3 +120,26 @@ Stage Summary:
 - REGISTRE COMPLET: règles officielles 2026/27 vérifiées + ligue réelle « Le fond de la classe » + 5 équipes nommées + XI réel R4 de Vital_GDB (4e, 284 pts, à 1 pt du dernier, 49 du leader nik Leroy)
 - Décisions D1, D2, D4 du cahier des charges désormais résolues; D3 (connecteur local) = option V2, la V1 fonctionne sur captures
 - Prochaine étape: construction de la V1 (moteur d'analyse + assistant IA branché sur ces données réelles, pipeline captures → JSON → analyse)
+
+---
+Task ID: 5
+Agent: Main agent (Super Z)
+Task: GO utilisateur (« Non vas y ») → construction et livraison de la V1 du Fantasy Coach Sofascore
+
+Work Log:
+- Recollecté le marché réel via l'article officiel « Premier League Fantasy Picks: Round 4 » (11 sept 2026) : 15 prix + ownership officiels (Raya 6,6M€/28,8% · Haaland 12M€/75,5% · João Pedro 7,9M€/38,2% · Gvardiol 6,8M€/17,4% · Rogers 7,4M€/16% · Ødegaard 7,8M€/9,7% · Wissa 5,7M€/12,4% · Egan 4,2M€/2,5% Hull City, etc.), fixtures R4-R8 des 5 clubs, séries officiellement les plus clémentes (Arsenal 1er de très loin, puis City/Chelsea/Newcastle/Liverpool) ; archivé dans data/fantasy/marche_R4_article_officiel.json
+- CORRECTIONS de lectures issues du croisement article ↔ capture : Egan = Hull City (pas Wolves), Wissa = Newcastle confirmé ; Trafford (Leeds) et Rogers (Chelsea) clarifiés ; clubs promus 2026/27 = Leeds + Hull (officiel) + Coventry (déduit)
+- Nouveau schéma Prisma Sofascore : League, Manager (5 réels), RoundScore (sourcés), Player (prix/ownership null si non sourcés + clubConfirmed), SquadSlot (XI réel R4 de Vital_GDB), Fixture (25 officielles R4-R8), DataEvent (journal d'ingestion) ; db push + generate
+- Seed 100% réel (scripts/seed-sofascore.ts) : 1 ligue, 5 managers, 8 RoundScore, 24 joueurs (15 slots), 25 fixtures, 5 DataEvent — chaque ligne porte sa source ; contrôle de cohérence 71+66+76+71 = 284 ✓
+- Moteur (src/lib/coach/) : rules.ts (règles officielles vérifiées partagées client/serveur), types.ts, engine.ts — heuristique de difficulté TRANSPARENTE (domicile, promu, club fort, série officielle) avec seuils calibrés (Arsenal @ Brighton = MOYEN), capitaine R5 (Haaland 21,5 > Raya 18 > Rice 9), vigilance effectif (Khusanov SURVEILLER, Justin/Wissa DOUTE, Fernandes SURVEILLER, Egan GARDER), cibles marché sourcées, alertes réelles (nik Leroy +37 en R4, écart leader −49, +1 sur Zarés JR), contexte assistant compact et anti-invention
+- API : /api/coach/{overview,team,league,players,fixtures,assistant} + /api/data (journal) ; assistant z-ai-web-dev-sdk ancré sur le contexte réel + repli rule-based ; ancien FPL supprimé (src/lib/fpl, /api/settings, anciens composants)
+- UI française dark premium (accent violet Sofascore) : 7 onglets — Accueil (hero 4ᵉ/5, capitaines, alertes sourcées), Mon Équipe (terrain 3-5-2 réel avec C Haaland, R4 ?, club ?, budget 44,3M€/6 sourcés + 9 à confirmer, dialog détail), Ligue (classement officiel + rituel des captures + état de la course), Marché (24 joueurs tracés, filtres, cibles), Calendrier (R5-R8 officiels + difficultés), Assistant (chat FR rapide), Données (qualité + journal d'ingestion + règles)
+- Bugs corrigés : relation Prisma League↔Manager, client Prisma stale (EADDRINUSE → kill du serveur précédent + restart), fixtureR5 IIFE cassée, totaux codés en dur → lus en base, gapToLast absent de l'overview, heuristique difficulté trop sévère
+- Vérification navigateur complète : Accueil (4ᵉ/5, 284 pts, −49/+1), Mon Équipe (3-5-2 complet, R4 ?, C), Ligue (classement 5 équipes réelles), Marché (24 joueurs, cibles FACILE), Calendrier (R5-R8), Assistant IA (2 questions réelles : capitaine → Haaland sourcé ; transferts → Gvardiol/Hall + garde-fous budget), Données (journal complet), mobile 390px OK, lint ✅, aucun erreur runtime
+
+Stage Summary:
+- LIVRABLE: application web « Fantasy Coach — Le fond de la classe » (port 3000, route /) 100% données réelles
+- Données: captures Vital_GDB (13 sept) + articles officiels Sofascore ; zéro donnée inventée, chaque chiffre porte sa source, inconnu = « à confirmer »
+- Fichiers clés: prisma/schema.prisma, scripts/seed-sofascore.ts, src/lib/coach/{rules,types,engine}.ts, src/app/api/coach/**, src/components/coach/**, src/app/page.tsx
+- Base: db/custom.db (24 joueurs, 25 fixtures, 5 managers, 8 scores) — relancer `bun scripts/seed-sofascore.ts` pour régénérer
+- Pipeline V1: captures utilisateur → seed/journal → moteur sourcé → assistant IA ; les captures rivaux (Captures C) enrichiront la War Room

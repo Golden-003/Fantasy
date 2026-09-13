@@ -1,617 +1,413 @@
-// ─── Moteur coach v2 — 100% données réelles (API officielle Fantasy Premier League) ───
-// Aucune donnée inventée : tout est calculé depuis bootstrap-static, fixtures, live,
-// entry (mon équipe réelle) et leagues-classic (ma vraie ligue privée).
-
+// ═══════════════════════════════════════════════════════════════
+// MOTEUR COACH — Sofascore Fantasy Premier League 2026/27
+// Ligue privée réelle « Le fond de la classe » (5 managers)
+//
+// PRINCIPE ABSOLU : ZÉRO DONNÉE INVENTÉE.
+// - Points  → captures réelles de l'app (13 sept 2026)
+// - Prix/%  → article officiel Sofascore « Picks R4 » (11 sept 2026)
+// - Fixtures→ article officiel « Best fixture runs R4-8 »
+// - Règles  → article officiel « What's New 2026/27 » (28 août 2026)
+// Tout le reste = null → affiché « à confirmer », jamais fabriqué.
+// ═══════════════════════════════════════════════════════════════
 import { db } from '@/lib/db'
-import * as fpl from '@/lib/fpl/client'
 import type {
-  AlertItem, BuyCandidate, FixtureChip, LeagueData, LiveNow, MyTeamOverview, PlayerRow,
-  PlayerStatus, Position, RivalAnalysis, SellCandidate, SquadEntry, TeamFixtureRow,
-  TransferPlan, Verdict,
+  Alert, CaptainPick, Difficulty, FixtureLite, FixtureView, LeagueView,
+  MarketTarget, Overview, Pos, SquadPlayerView, StandingRow, TeamView,
+  TransferFlag,
 } from './types'
 
-const POS_MAP: Record<number, Position> = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' }
-const num = (s: string | number | null | undefined) => parseFloat(String(s ?? '')) || 0
-const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
-const r1 = (v: number) => Math.round(v * 10) / 10
-const FIX_WINDOW = 5
+// ── Règles officielles vérifiées (ARTICLE-NOUVEAUTES-2627) ──────
+export const RULES = {
+  budget: 100,
+  squadSize: 15,
+  quota: { G: 2, D: 5, M: 5, A: 3 } as Record<Pos, number>,
+  freeTransfersPerRound: 2,
+  transferBankMax: 5,
+  extraTransferPenalty: 5,
+  captainMultiplier: 2,
+  tokens: [
+    { name: 'Triple Captain', effect: 'Capitaine ×3 au lieu de ×2', perSeason: 1 },
+    { name: 'Quick Fix', effect: 'Transfert supplémentaire sans pénalité', perSeason: 2 },
+    { name: 'Rebuild Squad', effect: 'Refonte de l’effectif', perSeason: 2, note: '1 par mi-saison' },
+  ],
+  maxOneTokenPerRound: true,
+  scoringNote:
+    'Points basés sur les ratings Sofascore + 30+ catégories. Changements 2026/27 : dégagements 6 = 1 pt, les passes ne marquent plus pour les défenseurs, pénalité pertes de balle dès 4, dribbles 3 = 1 pt, seuils GK (arrêts/dégagements) 3.',
+} as const
 
-export const NEED_SETUP = 'NEED_SETUP'
-export const verdictEmoji = (v: Verdict) => (v === 'GREEN' ? '🟢' : v === 'YELLOW' ? '🟡' : '🔴')
-
-export interface CoachSettings { teamId: number | null; leagueId: number | null; cookie: string | null }
-
-export async function getSettings(): Promise<CoachSettings> {
-  try {
-    const s = await db.settings.findUnique({ where: { id: 'default' } })
-    return { teamId: s?.teamId ?? null, leagueId: s?.leagueId ?? null, cookie: s?.cookie ?? null }
-  } catch {
-    return { teamId: null, leagueId: null, cookie: null }
-  }
+// Dates officielles des prochaines journées (capture app 13 sept)
+export const ROUND_DATES: Record<number, string> = {
+  5: '18 sept. 2026',
+  6: '10 oct. 2026',
+  7: '17 oct. 2026',
+  8: '23 oct. 2026',
 }
 
-// ─── Contexte de saison (réel) ───────────────────────────────────────────────
+// Clubs promus — Leeds & Hull cités comme promus dans l'article officiel ;
+// Coventry déduit des fixtures publiées (à confirmer).
+const PROMOTED_OFFICIAL = new Set(['Leeds United', 'Hull City'])
+const PROMOTED_DEDUCE = new Set(['Coventry City'])
+// Clubs forts (top du jeu selon l'article : Arsenal, City, Chelsea, Newcastle, Liverpool)
+const STRONG = new Set(['Arsenal', 'Manchester City', 'Liverpool', 'Chelsea', 'Newcastle United'])
+// Clubs dont les fixtures R4-R8 sont publiées officiellement
+const TRACKED = new Set(['Arsenal', 'Manchester City', 'Chelsea', 'Newcastle United', 'Liverpool'])
 
-interface Ctx {
-  teams: Map<number, fpl.FplTeam>
-  elements: fpl.FplElement[]
-  gwsFinished: number[]
-  gwsPlayed: number
-  currentGw: number | null
-  focusGw: number
-  seasonLabel: string
-  pastOpp: Map<string, { opp: number; venue: 'H' | 'A' }> // `${gw}:${teamId}`
-  upcomingByTeam: Map<number, fpl.FplFixture[]>
-  fixtures: fpl.FplFixture[]
+// ── Difficulté de fixture — heuristique TRANSPARENTE ───────────
+// Facteurs (affichés à l'utilisateur) : domicile, adversaire promu,
+// adversaire fort, série officiellement clémente du club.
+function fixtureDifficulty(club: string, opponent: string, isHome: boolean): { difficulty: Difficulty; note: string } {
+  if (!TRACKED.has(club)) return { difficulty: 'INCONNU', note: 'Fixture non publiée dans l’article officiel R4-8' }
+  let ease = 0
+  const factors: string[] = []
+  if (isHome) { ease += 1; factors.push('à domicile') }
+  else { factors.push('à l’extérieur') }
+  if (PROMOTED_OFFICIAL.has(opponent)) { ease += 1.5; factors.push(`adversaire promu (${opponent})`) }
+  else if (PROMOTED_DEDUCE.has(opponent)) { ease += 1.25; factors.push(`adversaire promu (${opponent}, déduit des fixtures)`) }
+  if (STRONG.has(opponent)) { ease -= 1; factors.push(`adversaire fort (${opponent})`) }
+  if (TRACKED.has(club)) { ease += 0.5; factors.push('série R4-8 officiellement parmi les 5 plus clémentes (article)') }
+  const difficulty: Difficulty = ease >= 1.5 ? 'FACILE' : ease >= 0.5 ? 'MOYEN' : 'DIFFICILE'
+  return { difficulty, note: factors.join(' · ') }
 }
 
-async function buildCtx(): Promise<Ctx> {
-  const boot = await fpl.getBootstrap()
-  const fixtures = await fpl.getFixtures()
-  const events = boot.events
-  const gwsFinished = events.filter((e) => e.finished).map((e) => e.id)
-  const current = events.find((e) => e.is_current && !e.finished)
-  const next = events.find((e) => e.is_next)
-  const focusGw = next?.id ?? current?.id ?? (gwsFinished.at(-1) ?? 0) + 1
-  const teams = new Map(boot.teams.map((t) => [t.id, t]))
+const easeBonus = (d: Difficulty) => (d === 'FACILE' ? 2 : d === 'MOYEN' ? 1 : 0)
 
-  const pastOpp = new Map<string, { opp: number; venue: 'H' | 'A' }>()
-  for (const f of fixtures) {
-    if (f.event == null || !f.finished) continue
-    pastOpp.set(`${f.event}:${f.team_h}`, { opp: f.team_a, venue: 'H' })
-    pastOpp.set(`${f.event}:${f.team_a}`, { opp: f.team_h, venue: 'A' })
-  }
-  const upcomingByTeam = new Map<number, fpl.FplFixture[]>()
-  for (const f of fixtures) {
-    if (f.event == null || f.event < focusGw) continue
-    for (const tid of [f.team_h, f.team_a]) {
-      const arr = upcomingByTeam.get(tid) ?? []
-      arr.push(f)
-      upcomingByTeam.set(tid, arr)
-    }
-  }
-  for (const arr of upcomingByTeam.values()) arr.sort((a, b) => (a.event ?? 0) - (b.event ?? 0))
+const fixtureLabel = (f: { opponent: string; isHome: boolean }) => `${f.isHome ? 'vs' : '@'} ${f.opponent}`
 
-  const y0 = new Date(events[0]?.deadline_time ?? Date.now()).getFullYear()
-  const seasonLabel = `Premier League ${y0}/${String((y0 + 1) % 100).padStart(2, '0')}`
-
-  return {
-    teams, elements: boot.elements, gwsFinished, gwsPlayed: gwsFinished.length,
-    currentGw: current?.id ?? null, focusGw, seasonLabel, pastOpp, upcomingByTeam, fixtures,
-  }
-}
-
-// Live réel par journée → map playerId → stats
-async function liveMap(gw: number, isCurrent: boolean) {
-  const live = await fpl.getLive(gw, isCurrent)
-  return new Map(live.elements.map((e) => [e.id, e.stats]))
-}
-
-async function picksFor(teamId: number, gw: number): Promise<fpl.FplPicks> {
-  for (const g of [gw, gw - 1, gw - 2]) {
-    if (g < 1) break
-    try { return await fpl.getEntryPicks(teamId, g) } catch { /* journée pas encore définie */ }
-  }
-  throw new Error('PICKS_UNAVAILABLE')
-}
-
-// ─── Construction des PlayerRow (joueurs réels) ──────────────────────────────
-
-const STATUS_MAP: Record<string, PlayerStatus> = { a: 'FIT', d: 'DOUBTFUL', i: 'INJURED', s: 'SUSPENDED', u: 'INJURED', n: 'FIT' }
-
-function availability(el: fpl.FplElement): number {
-  const chanceNext = el.chance_of_playing_next_round
-  switch (el.status) {
-    case 'a': return 1
-    case 'd': return clamp((el.chance_of_playing_this_round ?? 75) / 100, 0.15, 0.9)
-    case 'i': case 's': case 'u': return (chanceNext ?? 0) >= 75 ? 0.55 : 0.05
-    default: return 0.8
-  }
-}
-
-interface RowsOpts { ownership?: Map<number, string[]>; myIds?: Set<number> }
-
-function buildRows(ctx: Ctx, opts: RowsOpts) {
-  const lastGws = ctx.gwsFinished.slice(-5)
-  const livePromises = lastGws.map((gw) => liveMap(gw, ctx.currentGw === gw))
-  return Promise.all(livePromises).then((liveByGw) => {
-    const rows: PlayerRow[] = []
-    for (const el of ctx.elements) {
-      if (el.removed || el.special) continue
-      const team = ctx.teams.get(el.team)
-      if (!team) continue
-      const position = POS_MAP[el.element_type]
-      const status = STATUS_MAP[el.status] ?? 'FIT'
-      const gwp = Math.max(1, ctx.gwsPlayed)
-      const minutesPct = clamp(Math.round((el.minutes / (gwp * 90)) * 100), 0, 100)
-      const expectedMinutes = clamp(el.minutes / (gwp * 90), 0, 1)
-      const formN = num(el.form)
-      const ppg = num(el.points_per_game)
-      const A = availability(el)
-
-      // 5 derniers matchs réels (live FPL : minutes, buts, passes, BPS)
-      const last5: Last5Match[] = []
-      let apps = 0
-      for (let i = 0; i < lastGws.length; i++) {
-        const gw = lastGws[i]
-        const st = liveByGw[i]?.get(el.id)
-        const opp = ctx.pastOpp.get(`${gw}:${el.team}`)
-        if (!st || !opp) continue
-        if (st.minutes === 0 && st.bps === 0) continue
-        if (st.minutes > 0) apps++
-        last5.push({
-          gw,
-          oppShort: ctx.teams.get(opp.opp)?.short_name ?? '?',
-          venue: opp.venue,
-          rating: r1(clamp(4 + st.bps / 10, 4, 10)),
-          minutes: st.minutes, goals: st.goals_scored, assists: st.assists,
-        })
-      }
-
-      // Calendrier réel à venir (5 journées, doubles journées gérées)
-      const fixtures: FixtureChip[] = []
-      const upc = ctx.upcomingByTeam.get(el.team) ?? []
-      for (const f of upc) {
-        if (fixtures.length >= FIX_WINDOW + 2) break
-        const home = f.team_h === el.team
-        const opp = ctx.teams.get(home ? f.team_a : f.team_h)
-        if (!opp || f.event == null) continue
-        fixtures.push({ gw: f.event, opp: opp.short_name, venue: home ? 'H' : 'A', difficulty: home ? f.team_h_difficulty : f.team_a_difficulty })
-      }
-      const diffs = fixtures.slice(0, FIX_WINDOW).map((f) => f.difficulty)
-      const avgDiff = diffs.length ? diffs.reduce((a, b) => a + b, 0) / diffs.length : 3
-      const fixtureScore = clamp(Math.round(((6 - avgDiff) / 5) * 100), 0, 100)
-
-      // Projection J+1 (explicable, calée sur ep_next officiel + forme + minutes + calendrier)
-      const epNext = num(el.ep_next)
-      const base = 0.45 * epNext + 0.35 * formN + 0.2 * ppg
-      const fx3 = (fixtures.slice(0, 3).map((f) => f.difficulty).reduce((a, b) => a + b, 0) / Math.max(1, fixtures.slice(0, 3).length)) || 3
-      const F = 1 + (3 - fx3) * 0.09
-      const M = clamp(expectedMinutes, 0.25, 1)
-      const projection = r1(base * M * F * A)
-
-      // Cumul 5 journées
-      let p5 = 0
-      for (const f of fixtures.slice(0, FIX_WINDOW)) {
-        p5 += base * M * (1 + (3 - f.difficulty) * 0.09) * A
-      }
-      const projection5 = r1(p5)
-
-      // Verdict 🟢🟡🔴 avec raisons réelles
-      const reasons: string[] = []
-      let red = false, green = false
-      if (A < 0.5) {
-        red = true
-        reasons.push(`Très incertain pour J${ctx.focusGw} — ${el.news || 'statut ' + el.status.toUpperCase()}`)
-      } else if (status === 'DOUBTFUL') {
-        reasons.push(`Incertitude physique : ${el.chance_of_playing_this_round ?? 75}% de jouer — ${el.news || 'suivi de l’effectif'}`)
-      }
-      if (projection >= 6.2) {
-        green = true
-        reasons.push(`Projection ${fmtN(projection)} pts pour J${ctx.focusGw} (forme ${fmtN(formN)}, ép_next officiel ${fmtN(epNext)})`)
-      }
-      if (formN >= 5 && fixtureScore >= 60) {
-        green = true
-        reasons.push(`Forme chaude (${fmtN(formN)} pts) et calendrier favorable (${fixtureScore}/100)`)
-      }
-      if (minutesPct < 40 && A > 0.5) {
-        red = true
-        reasons.push(`Temps de jeu limité : ${el.minutes} min sur ${ctx.gwsPlayed} journées (${minutesPct}%)`)
-      }
-      if (formN < 2.8 && projection < 3.5 && A > 0.5) {
-        red = true
-        reasons.push(`Forme critique (${fmtN(formN)}) et faible projection (${fmtN(projection)})`)
-      }
-      if (reasons.length === 0) {
-        reasons.push(`Rendement moyen : forme ${fmtN(formN)}, proj. ${fmtN(projection)}, calendrier ${fixtureScore}/100`)
-      }
-      const verdict: Verdict = red ? 'RED' : green ? 'GREEN' : 'YELLOW'
-
-      const startShare = el.starts / gwp
-      const rotationRisk = ctx.gwsPlayed === 0 ? 'MEDIUM' : startShare < 0.45 ? 'HIGH' : startShare < 0.75 ? 'MEDIUM' : 'LOW'
-      let trend: 'UP' | 'DOWN' | 'STABLE' = 'STABLE'
-      if (el.cost_change_event > 0 || formN > ppg + 0.5) trend = 'UP'
-      else if (el.cost_change_event < 0 || formN < ppg - 0.5) trend = 'DOWN'
-
-      const ownedRivals = opts.ownership?.get(el.id) ?? []
-      const injuryNote = el.news && status !== 'FIT' ? el.news : status === 'DOUBTFUL' ? el.news || 'Incertitude physique' : null
-
-      rows.push({
-        id: String(el.id), fplId: el.id, name: el.web_name,
-        teamId: String(el.team), teamShort: team.short_name, teamName: team.name,
-        position, price: el.now_cost / 10,
-        ownership: num(el.selected_by_percent),
-        status, injuryNote, rotationRisk, trend,
-        rating: r1(ppg), form: r1(formN),
-        minutesPct, expectedMinutes, epNext,
-        stats: {
-          apps: Math.max(apps, el.starts), minutes: el.minutes, starts: el.starts,
-          goals: el.goals_scored, assists: el.assists,
-          xg: num(el.expected_goals), xa: num(el.expected_assists), xgi: num(el.expected_goal_involvements),
-          cleanSheets: el.clean_sheets, saves: el.saves, bonus: el.bonus, bps: el.bps,
-          tackles: el.tackles, cbi: el.clearances_blocks_interceptions, recoveries: el.recoveries,
-          yellow: el.yellow_cards, red: el.red_cards,
-        },
-        last5, fixtures, fixtureScore, projection, projection5, verdict, reasons,
-        ownedByMe: opts.myIds?.has(el.id) ?? false, ownedByRivals: ownedRivals,
-      })
-    }
-    return rows
+// ── Mon équipe réelle ──────────────────────────────────────────
+export async function getTeam(): Promise<TeamView> {
+  const slots = await db.squadSlot.findMany({
+    include: { player: true },
+    orderBy: [{ role: 'asc' }, { slotPosition: 'asc' }],
   })
-}
-type Last5Match = PlayerRow['last5'][number]
-const fmtN = (v: number) => v.toFixed(1).replace('.', ',')
+  const fixturesR5 = await db.fixture.findMany({ where: { round: 5 } })
+  const fixMap = new Map(fixturesR5.map((f) => [f.club, f]))
 
-// ─── Métriques de squad (moi + rivaux) ───────────────────────────────────────
-
-interface SquadMetrics {
-  starters: SquadEntry[]
-  bench: SquadEntry[]
-  projected: number
-  squadScore: number
-  captainName: string | null
-  overlapIds: Set<number>
-}
-
-function squadMetrics(rowsById: Map<number, PlayerRow>, picks: fpl.FplPicks): SquadMetrics {
-  const entries: SquadEntry[] = picks.picks.map((p) => ({
-    slot: p.position,
-    isStarter: p.position <= 11,
-    isCaptain: p.is_captain,
-    player: rowsById.get(p.element) ?? fallbackRow(p.element),
-  }))
-  const starters = entries.filter((e) => e.isStarter).sort((a, b) => a.slot - b.slot)
-  const bench = entries.filter((e) => !e.isStarter).sort((a, b) => a.slot - b.slot)
-  const proj = (e: SquadEntry) => (e.player.status === 'FIT' || e.player.status === 'DOUBTFUL' ? e.player.projection : 0)
-  let projected = starters.reduce((acc, e) => acc + proj(e), 0)
-  const cap = starters.find((e) => e.isCaptain)
-  if (cap) { projected += proj(cap); }
-  const captainName = cap?.player.name ?? null
-  const avg = starters.length ? starters.reduce((acc, e) => acc + proj(e), 0) / starters.length : 0
-  const squadScore = clamp(Math.round(((avg - 2.5) / 5) * 100), 1, 99)
-  const overlapIds = new Set(entries.map((e) => e.player.fplId))
-  return { starters, bench, projected: Math.round(projected * 10) / 10, squadScore, captainName, overlapIds }
-}
-
-const fallbackRow = (fplId: number): PlayerRow => ({
-  id: String(fplId), fplId, name: `Joueur #${fplId}`, teamId: '0', teamShort: '?', teamName: '?',
-  position: 'MID', price: 0, ownership: 0, status: 'FIT', injuryNote: null, rotationRisk: 'MEDIUM',
-  trend: 'STABLE', rating: 0, form: 0, minutesPct: 0, expectedMinutes: 0, epNext: 0,
-  stats: { apps: 0, minutes: 0, starts: 0, goals: 0, assists: 0, xg: 0, xa: 0, xgi: 0, cleanSheets: 0, saves: 0, bonus: 0, bps: 0, tackles: 0, cbi: 0, recoveries: 0, yellow: 0, red: 0 },
-  last5: [], fixtures: [], fixtureScore: 50, projection: 0, projection5: 0, verdict: 'YELLOW',
-  reasons: [], ownedByMe: false, ownedByRivals: [],
-})
-
-// ─── Mon équipe réelle ───────────────────────────────────────────────────────
-
-function estimateFreeTransfers(history: fpl.FplEntryHistory): number {
-  let ft = 1
-  const evs = history.current.filter((e) => e.event >= 2).sort((a, b) => a.event - b.event)
-  for (const e of evs) ft = Math.min(2, Math.max(0, ft - e.event_transfers) + 1)
-  return ft
-}
-
-async function buildMyTeam(ctx: Ctx, settings: CoachSettings, rowsById: Map<number, PlayerRow>, myPicks: fpl.FplPicks, entry: fpl.FplEntry, history: fpl.FplEntryHistory): Promise<MyTeamOverview> {
-  const m = squadMetrics(rowsById, myPicks)
-  const eh = myPicks.entry_history
-  const lastHist = history.current.at(-1)
-  const bank = (eh?.bank ?? lastHist?.bank ?? 0) / 10
-  const teamValue = (eh?.value ?? lastHist?.value ?? 1000) / 10
-
-  // Transferts restants : exact si cookie valide, sinon estimation depuis l'historique réel
-  let transfersLeft = estimateFreeTransfers(history)
-  let transfersExact = false
-  if (settings.cookie) {
-    try {
-      const mt = await fpl.getMyTeam(settings.teamId!, settings.cookie)
-      if (mt?.transfers) {
-        transfersLeft = Math.max(0, (mt.transfers.limit ?? 1) - (mt.transfers.made ?? 0))
-        transfersExact = true
-      }
-    } catch { /* cookie expiré → estimation */ }
-  }
-
-  // Capitaine suggéré = meilleure projection du XI réel
-  const best = [...m.starters].filter((e) => e.player.projection > 0).sort((a, b) => b.player.projection - a.player.projection)[0]
-  const captainSuggestion = best && best.player.name !== m.captainName ? { name: best.player.name, projection: best.player.projection } : null
-
-  const weakestStarters = [...m.starters]
-    .filter((e) => e.player.projection < 5.2 || e.player.status === 'INJURED' || e.player.status === 'SUSPENDED')
-    .sort((a, b) => a.player.projection - b.player.projection)
-    .slice(0, 3)
-    .map((e) => ({ name: e.player.name, projection: e.player.projection, verdict: e.player.verdict, reason: e.player.reasons[0] ?? 'Projection faible' }))
-
-  return {
-    teamName: entry.name, ownerName: `${entry.player_first_name} ${entry.player_last_name}`.trim(),
-    bank: r1(bank), transfersLeft, transfersExact, totalPoints: entry.summary_overall_points ?? lastHist?.total_points ?? 0,
-    rank: 0, leagueSize: 5, squadScore: m.squadScore, teamValue: r1(teamValue),
-    starters: m.starters, bench: m.bench, captainSuggestion,
-    projectedGwPoints: Math.round(m.projected), weakestStarters,
-  }
-}
-
-// ─── Plan de transferts ──────────────────────────────────────────────────────
-
-function buildTransfers(ctx: Ctx, rows: PlayerRow[], me: MyTeamOverview, myPicks: fpl.FplPicks): TransferPlan {
-  const myIds = new Set(myPicks.picks.map((p) => p.element))
-  const owned = rows.filter((r) => myIds.has(r.fplId))
-  const pool = rows.filter((r) => !myIds.has(r.fplId) && r.price > 0)
-
-  const flagReason = (p: PlayerRow): string | null => {
-    if (p.status === 'INJURED' || p.status === 'SUSPENDED') return `${p.injuryNote ?? 'Indisponible'} — absent pour J${ctx.focusGw}`
-    if (p.status === 'DOUBTFUL') return `Incertitude physique (${p.injuryNote ?? 'suivi'})`
-    if (p.minutesPct < 45) return `Temps de jeu insuffisant (${p.minutesPct}% des minutes)`
-    if (p.form < 3.2) return `Forme faible (${fmtN(p.form)} pts de moyenne sur 5)`
-    if (p.fixtureScore < 40) return `Calendrier des 5 prochaines journées difficile (${p.fixtureScore}/100)`
-    if (p.projection < 4.2) return `Projection faible pour J${ctx.focusGw} (${fmtN(p.projection)})`
-    return null
-  }
-
-  const sell: SellCandidate[] = owned
-    .map((p) => ({ p, r: flagReason(p) }))
-    .sort((a, b) => (a.r ? 0 : 1) - (b.r ? 0 : 1) || a.p.projection - b.p.projection)
-    .slice(0, 3)
-    .filter((x) => x.r)
-    .map(({ p, r }) => ({ player: p, reason: r! }))
-
-  const buy: BuyCandidate[] = []
-  const seen = new Set<number>()
-  for (const s of sell) {
-    const budget = s.player.price + me.bank
-    const cands = pool
-      .filter((p) => p.position === s.player.position && p.price <= budget + 0.1 && !seen.has(p.fplId))
-      .sort((a, b) => b.projection - a.projection)
-      .slice(0, 2)
-    for (const c of cands) {
-      if (c.projection <= s.player.projection + 0.1) continue
-      seen.add(c.fplId)
-      buy.push({
-        player: c, netGain: r1(c.projection - s.player.projection), comparedTo: s.player.name,
-        affordable: true, differential: c.ownedByRivals.length === 0,
-        justification: `Forme ${fmtN(c.form)} • proj. J${ctx.focusGw} ${fmtN(c.projection)} • calendrier ${c.fixtureScore}/100${c.ownedByRivals.length === 0 ? ' • 0 rival ne le possède' : ''}`,
-      })
+  const view = (s: (typeof slots)[number]): SquadPlayerView => {
+    const fx = s.player.clubConfirmed ? fixMap.get(s.player.club) : undefined
+    let fixtureR5: FixtureLite | null = null
+    if (fx) {
+      const { difficulty, note } = fixtureDifficulty(fx.club, fx.opponent, fx.isHome)
+      fixtureR5 = { opponent: fx.opponent, isHome: fx.isHome, difficulty, note }
     }
-  }
-  // Cibles libres si banque déjà suffisante (pas de vente nécessaire)
-  const freeBudget = me.bank + Math.min(...(sell.length ? sell.map((s) => s.player.price) : [4.5]))
-  if (buy.length < 6) {
-    const free = pool
-      .filter((p) => p.price <= freeBudget && !seen.has(p.fplId) && p.projection >= 5.5)
-      .sort((a, b) => b.projection - a.projection)
-      .slice(0, 6 - buy.length)
-    for (const c of free) {
-      seen.add(c.fplId)
-      buy.push({
-        player: c, netGain: null, comparedTo: null, affordable: true, differential: c.ownedByRivals.length === 0,
-        justification: `Amélioration directe : proj. ${fmtN(c.projection)} (forme ${fmtN(c.form)}, calendrier ${c.fixtureScore}/100)${c.ownedByRivals.length === 0 ? ' • 0 rival ne le possède' : ''}`,
-      })
-    }
-  }
-  return { bank: me.bank, transfersLeft: me.transfersLeft, sell, buy }
-}
-
-// ─── Alertes ─────────────────────────────────────────────────────────────────
-
-function buildAlerts(ctx: Ctx, rows: PlayerRow[], me: MyTeamOverview, rivals: RivalAnalysis[]): AlertItem[] {
-  const alerts: AlertItem[] = []
-  const myIds = new Set([...me.starters, ...me.bench].map((e) => e.player.fplId))
-
-  for (const p of rows.filter((r) => myIds.has(r.fplId))) {
-    if (p.status === 'INJURED' || p.status === 'SUSPENDED') {
-      alerts.push({ id: `RISK:${p.fplId}`, type: 'SQUAD_RISK', severity: 'danger', title: `${p.name} indisponible`, detail: `${p.injuryNote ?? 'Statut ' + p.status} — prévois un remplacement pour J${ctx.focusGw}.`, playerId: p.id })
-    } else if (p.status === 'DOUBTFUL') {
-      alerts.push({ id: `RISK:${p.fplId}`, type: 'SQUAD_RISK', severity: 'warning', title: `${p.name} incertain`, detail: p.injuryNote ?? 'Incertitude physique — surveille les news avant le deadline.', playerId: p.id })
-    } else if (p.rotationRisk === 'HIGH' && p.minutesPct < 50) {
-      alerts.push({ id: `ROT:${p.fplId}`, type: 'SQUAD_RISK', severity: 'warning', title: `Rotation : ${p.name}`, detail: `Seulement ${p.minutesPct}% des minutes cette saison — risque de banc élevé.`, playerId: p.id })
-    } else if (p.price >= 8 && p.form < 3.5) {
-      alerts.push({ id: `UNDER:${p.fplId}`, type: 'UNDERPERF', severity: 'warning', title: `${p.name} sous-performe`, detail: `${fmtN(p.price)}M pour une forme de ${fmtN(p.form)} — rentabilité insuffisante.`, playerId: p.id })
-    }
-  }
-
-  const opportunities = rows
-    .filter((p) => !p.ownedByMe && p.form >= 5.5 && p.price <= 7.5 && p.fixtureScore >= 60 && p.ownedByRivals.length <= 1 && p.projection >= 5)
-    .sort((a, b) => b.projection - a.projection).slice(0, 3)
-  for (const p of opportunities) {
-    alerts.push({ id: `OPP:${p.fplId}`, type: 'OPPORTUNITY', severity: 'success', title: `Opportunité : ${p.name}`, detail: `${p.teamShort} • ${fmtN(p.price)}M • forme ${fmtN(p.form)} • calendrier ${p.fixtureScore}/100 • possédé par ${p.ownedByRivals.length} rival(s) dans ta ligue.`, playerId: p.id })
-  }
-
-  const threats = rivals
-    .flatMap((r) => r.threats.map((t) => ({ rival: r.ownerName, t })))
-    .filter((x) => x.t.projection >= 6)
-    .sort((a, b) => b.t.projection - a.t.projection).slice(0, 2)
-  for (const x of threats) {
-    alerts.push({ id: `THREAT:${x.rival}:${x.t.name}`, type: 'RIVAL_THREAT', severity: 'info', title: `${x.rival} mise sur ${x.t.name}`, detail: `Projection ${fmtN(x.t.projection)} pts pour J${ctx.focusGw} — ce joueur n'est pas dans ton équipe.`, playerId: undefined })
-  }
-
-  if (me.captainSuggestion) {
-    alerts.push({ id: 'CAPTAIN', type: 'CAPTAIN', severity: 'info', title: `Capitaine optimal : ${me.captainSuggestion.name}`, detail: `Projection ${fmtN(me.captainSuggestion.projection)} pts — supérieure au brassard actuel.`, playerId: me.starters.find((s) => s.player.name === me.captainSuggestion!.name)?.player.id })
-  }
-  const order = { danger: 0, warning: 1, info: 2, success: 3 } as const
-  return alerts.sort((a, b) => order[a.severity] - order[b.severity]).slice(0, 12)
-}
-
-// ─── Ligue réelle ────────────────────────────────────────────────────────────
-
-export async function buildLeagueData(ctx: Ctx, settings: CoachSettings, rowsById: Map<number, PlayerRow>, rows: PlayerRow[], myPicks: fpl.FplPicks, myMetrics: SquadMetrics, myTotal: number): Promise<LeagueData> {
-  if (!settings.leagueId) throw new Error(NEED_SETUP)
-  const standing = await fpl.getLeagueStandings(settings.leagueId)
-  const results = standing.standings.results
-  const myEntryId = settings.teamId!
-
-  const ownership = new Map<number, string[]>() // playerId → rivaux
-  const rivalsData: { name: string; owner: string; entryId: number; total: number; picks: fpl.FplPicks; metrics: SquadMetrics }[] = []
-
-  for (const res of results) {
-    if (res.entry === myEntryId) continue
-    try {
-      const picks = await picksFor(res.entry, ctx.focusGw)
-      const metrics = squadMetrics(rowsById, picks)
-      rivalsData.push({ name: res.entry_name, owner: res.player_name, entryId: res.entry, total: res.total, picks, metrics })
-      for (const p of picks.picks) {
-        const arr = ownership.get(p.element) ?? []
-        arr.push(res.entry_name)
-        ownership.set(p.element, arr)
-      }
-    } catch { /* rival introuvable → ignoré */ }
-  }
-
-  const standings = results.map((res, i) => {
-    const isMine = res.entry === myEntryId
-    let sq = 0, proj = 0
-    if (isMine) { sq = myMetrics.squadScore; proj = Math.round(myMetrics.projected) }
-    else {
-      const r = rivalsData.find((x) => x.entryId === res.entry)
-      sq = r?.metrics.squadScore ?? 0; proj = Math.round(r?.metrics.projected ?? 0)
-    }
-    return { rank: res.rank_sort ?? i + 1, teamName: res.entry_name, ownerName: res.player_name, isMine, totalPoints: res.total, squadScore: sq, projectedGwPoints: proj }
-  })
-
-  const rivals: RivalAnalysis[] = rivalsData.map((r) => {
-    const overlap = [...r.metrics.overlapIds].filter((id) => myMetrics.overlapIds.has(id)).length
-    const diff = r.metrics.projected - myMetrics.projected
-    const threatLevel: RivalAnalysis['threatLevel'] = diff >= 4 ? 'HIGH' : diff >= -1 ? 'MEDIUM' : 'LOW'
-    const threats = r.metrics.starters
-      .filter((e) => !myMetrics.overlapIds.has(e.player.fplId) && e.player.projection >= 5)
-      .sort((a, b) => b.player.projection - a.player.projection).slice(0, 3)
-      .map((e) => ({ name: e.player.name, position: e.player.position, teamShort: e.player.teamShort, projection: e.player.projection, price: e.player.price }))
-    const top = threats[0]
-    const advice = threatLevel === 'HIGH'
-      ? `Proj. J${ctx.focusGw} supérieure de ${fmtN(r.metrics.projected - myMetrics.projected)} pts${top ? ` — il mise sur ${top.name} (${fmtN(top.projection)}) : contre ou différentiel.` : '.'}`
-      : threatLevel === 'MEDIUM'
-        ? 'Profil proche du tien — le capitaine et les différentiels feront la différence.'
-        : 'Projeté derrière toi cette journée — joue ton jeu, pas le sien.'
     return {
-      teamName: r.name, ownerName: r.owner, totalPoints: r.total, squadScore: r.metrics.squadScore,
-      projectedGwPoints: Math.round(r.metrics.projected), threatLevel, overlap, threats, advice,
-      squad: [...r.metrics.starters, ...r.metrics.bench].map((e) => ({ name: e.player.name, position: e.player.position, teamShort: e.player.teamShort, isCaptain: e.isCaptain, projection: e.player.projection, verdict: e.player.verdict })),
+      id: s.player.id,
+      name: s.player.name,
+      club: s.player.club,
+      clubConfirmed: s.player.clubConfirmed,
+      position: s.slotPosition as Pos,
+      role: s.role as 'TITULAIRE' | 'BANC',
+      captain: s.captain,
+      pointsR4: s.pointsR4,
+      pointsNote: s.pointsNote,
+      price: s.player.price,
+      ownership: s.player.ownership,
+      priceSource: s.player.priceSource,
+      formNote: s.player.formNote,
+      fixtureR5,
     }
-  }).sort((a, b) => b.projectedGwPoints - a.projectedGwPoints)
-
-  const differentials = rows
-    .filter((p) => !p.ownedByMe && (ownership.get(p.fplId)?.length ?? 0) === 0 && p.projection >= 5 && p.price <= 9.5 && p.status !== 'INJURED' && p.status !== 'SUSPENDED')
-    .sort((a, b) => b.projection - a.projection).slice(0, 8)
-
-  return { leagueName: standing.league.name, myScore: myTotal, standings, rivals, differentials }
-}
-
-// ─── Orchestration ───────────────────────────────────────────────────────────
-
-export interface CoachData {
-  me: MyTeamOverview
-  alerts: AlertItem[]
-  transfers: TransferPlan
-  nextGw: number
-  seasonLabel: string
-  live: LiveNow | null
-  syncedAt: string
-  rows: PlayerRow[]
-  rowsById: Map<number, PlayerRow>
-  league: LeagueData
-}
-
-export async function getCoachData(): Promise<CoachData> {
-  const settings = await getSettings()
-  if (!settings.teamId || !settings.leagueId) throw new Error(NEED_SETUP)
-  const ctx = await buildCtx()
-
-  const [entry, history] = await Promise.all([fpl.getEntry(settings.teamId), fpl.getEntryHistory(settings.teamId)])
-  const myPicks = await picksFor(settings.teamId, ctx.focusGw)
-
-  const rows = await buildRows(ctx, { myIds: new Set(myPicks.picks.map((p) => p.element)) })
-  const rowsById = new Map(rows.map((r) => [r.fplId, r]))
-  const myMetrics = squadMetrics(rowsById, myPicks)
-
-  // Ligue réelle : rivaux + possession dans la ligue → enrichit ownedByRivals
-  const standing = await fpl.getLeagueStandings(settings.leagueId)
-  const ownership = new Map<number, string[]>()
-  const rivalPicksList: { entryId: number; name: string; picks: fpl.FplPicks }[] = []
-  for (const res of standing.standings.results) {
-    if (res.entry === settings.teamId) continue
-    try {
-      const picks = await picksFor(res.entry, ctx.focusGw)
-      rivalPicksList.push({ entryId: res.entry, name: res.entry_name, picks })
-      for (const p of picks.picks) ownership.set(p.element, [...(ownership.get(p.element) ?? []), res.entry_name])
-    } catch { /* ignoré */ }
-  }
-  for (const r of rows) r.ownedByRivals = ownership.get(r.fplId) ?? []
-
-  // Points LIVE réels de la journée en cours (multipliant capitaine inclus)
-  let live: LiveNow | null = null
-  if (ctx.currentGw) {
-    try {
-      const [curPicks, curLive] = await Promise.all([fpl.getEntryPicks(settings.teamId, ctx.currentGw), fpl.getLive(ctx.currentGw, true)])
-      const statsById = new Map(curLive.elements.map((e) => [e.id, e.stats]))
-      let points = 0
-      let remaining = 0
-      for (const p of curPicks.picks.filter((x) => x.position <= 11)) {
-        const st = statsById.get(p.element)
-        const row = rowsById.get(p.element)
-        if (st) points += st.total_points * p.multiplier
-        if (row) {
-          const tid = Number(row.teamId)
-          const fx = ctx.fixtures.find((f) => f.event === ctx.currentGw && !f.started && (f.team_h === tid || f.team_a === tid))
-          if (fx) remaining++
-        }
-      }
-      live = { gw: ctx.currentGw, points, remaining }
-    } catch { /* pas de live */ }
   }
 
-  const me = await buildMyTeam(ctx, settings, rowsById, myPicks, entry, history)
-  me.rank = standing.standings.results.findIndex((r) => r.entry === settings.teamId) + 1 || 0
-  me.leagueSize = standing.standings.results.length || me.leagueSize
+  const starters = slots.filter((s) => s.role === 'TITULAIRE').map(view)
+  const bench = slots.filter((s) => s.role === 'BANC').map(view)
 
-  const league = await buildLeagueData(ctx, settings, rowsById, rows, myPicks, myMetrics, me.totalPoints)
-  const transfers = buildTransfers(ctx, rows, me, myPicks)
-  const alerts = buildAlerts(ctx, rows, me, league.rivals)
+  const byPos = (arr: SquadPlayerView[]) => {
+    const g = arr.filter((p) => p.position === 'G').length
+    const d = arr.filter((p) => p.position === 'D').length
+    const m = arr.filter((p) => p.position === 'M').length
+    const a = arr.filter((p) => p.position === 'A').length
+    return [g, d, m, a]
+  }
+  const [, d, m, a] = byPos(starters)
+  const formation = `${d}-${m}-${a}`
+
+  const priced = [...starters, ...bench].filter((p) => p.price != null)
+  const knownSpend = priced.reduce((acc, p) => acc + (p.price ?? 0), 0)
+  const unknown = [...starters, ...bench].filter((p) => p.price == null).map((p) => p.name)
+
+  const scores = await db.roundScore.findMany({ include: { manager: true }, orderBy: { round: 'asc' } })
+  const mine = scores.filter((s) => s.manager.isUser && s.points != null)
+  const at = (r: number) => mine.find((s) => s.round === r)?.points ?? 0
+  const totals = {
+    r1: at(1), r2: at(2), r3: at(3), r4: at(4),
+    total: mine.find((s) => s.round === 4)?.totalAfter ?? mine.reduce((acc, s) => acc + (s.points ?? 0), 0),
+  }
 
   return {
-    me, alerts, transfers, nextGw: ctx.focusGw, seasonLabel: ctx.seasonLabel, live,
-    syncedAt: new Date().toISOString(), rows, rowsById, league,
+    formation,
+    starters,
+    bench,
+    knownSpend: Math.round(knownSpend * 10) / 10,
+    knownPriceCount: priced.length,
+    unknownPriceCount: unknown,
+    totals,
   }
 }
 
-export async function getPlayersData(): Promise<{ players: PlayerRow[]; nextGw: number; hasOwnership: boolean }> {
-  const settings = await getSettings()
-  const ctx = await buildCtx()
-  if (!settings.teamId) {
-    const rows = await buildRows(ctx, {})
-    return { players: rows, nextGw: ctx.focusGw, hasOwnership: false }
-  }
-  const myPicks = await picksFor(settings.teamId, ctx.focusGw)
-  const myIds = new Set(myPicks.picks.map((p) => p.element))
-  const ownership = new Map<number, string[]>()
-  if (settings.leagueId) {
-    try {
-      const standing = await fpl.getLeagueStandings(settings.leagueId)
-      for (const res of standing.standings.results) {
-        if (res.entry === settings.teamId) continue
-        try {
-          const picks = await picksFor(res.entry, ctx.focusGw)
-          for (const p of picks.picks) ownership.set(p.element, [...(ownership.get(p.element) ?? []), res.entry_name])
-        } catch { /* ignoré */ }
-      }
-    } catch { /* ligue indisponible */ }
-  }
-  const rows = await buildRows(ctx, { myIds, ownership })
-  return { players: rows, nextGw: ctx.focusGw, hasOwnership: true }
-}
-
-export async function getFixturesData(): Promise<{ teams: TeamFixtureRow[]; nextGw: number; seasonLabel: string }> {
-  const ctx = await buildCtx()
-  const teams: TeamFixtureRow[] = []
-  for (const t of ctx.teams.values()) {
-    const fixtures: FixtureChip[] = []
-    for (const f of (ctx.upcomingByTeam.get(t.id) ?? [])) {
-      if (fixtures.length >= FIX_WINDOW + 2) break
-      const home = f.team_h === t.id
-      const opp = ctx.teams.get(home ? f.team_a : f.team_h)
-      if (!opp || f.event == null) continue
-      fixtures.push({ gw: f.event, opp: opp.short_name, venue: home ? 'H' : 'A', difficulty: home ? f.team_h_difficulty : f.team_a_difficulty })
+// ── Capitaine R5 — classement transparent ─────────────────────
+export async function getCaptainPicks(team?: TeamView): Promise<CaptainPick[]> {
+  const t = team ?? (await getTeam())
+  const picks: Omit<CaptainPick, 'rank'>[] = []
+  for (const p of t.starters) {
+    if (!p.fixtureR5 || p.fixtureR5.difficulty === 'INCONNU') continue
+    const reasons: string[] = []
+    let score = 0
+    if (p.pointsR4 != null) {
+      score += p.pointsR4
+      reasons.push(`${p.pointsR4} pts réels en R4 (capture)`)
+    } else if (p.pointsNote) {
+      reasons.push(`points R4 incomplets : ${p.pointsNote}`)
     }
-    const diffs = fixtures.slice(0, FIX_WINDOW).map((f) => f.difficulty)
-    const avgDiff = diffs.length ? diffs.reduce((a, b) => a + b, 0) / diffs.length : 3
-    teams.push({ id: String(t.id), name: t.name, short: t.short_name, fixtures, fixtureScore: clamp(Math.round(((6 - avgDiff) / 5) * 100), 0, 100) })
+    if (p.formNote) {
+      score += 1
+      reasons.push(`forme officielle : ${p.formNote}`)
+    }
+    if (p.captain) {
+      score += 0.5
+      reasons.push('capitaine sortant (R4)')
+    }
+    score += easeBonus(p.fixtureR5.difficulty)
+    reasons.push(`R5 ${fixtureLabel(p.fixtureR5)} — ${p.fixtureR5.difficulty} (${p.fixtureR5.note})`)
+    if (p.ownership != null) reasons.push(`détenu par ${p.ownership}% du jeu (article officiel)`)
+    picks.push({
+      playerId: p.id, name: p.name, club: p.club, position: p.position,
+      fixture: fixtureLabel(p.fixtureR5), difficulty: p.fixtureR5.difficulty,
+      score: Math.round(score * 10) / 10, reasons,
+    })
   }
-  return { teams, nextGw: ctx.focusGw, seasonLabel: ctx.seasonLabel }
+  picks.sort((x, y) => y.score - x.score)
+  return picks.map((p, i) => ({ ...p, rank: i + 1 }))
+}
+
+// ── Vigilance effectif (signaux 100% réels) ───────────────────
+export async function getTransferFlags(): Promise<TransferFlag[]> {
+  const t = await getTeam()
+  const all = [...t.starters, ...t.bench]
+  const by = (n: string) => all.find((p) => p.name === n)
+  const flags: TransferFlag[] = []
+  const push = (name: string, kind: TransferFlag['kind'], reason: string, source: string) => {
+    const p = by(name)
+    if (p) flags.push({ playerId: p.id, name, kind, reason, source })
+  }
+  push('Abdukodir Khusanov', 'SURVEILLER', '0 pt en R4, pas entré en jeu lors du derby — risque de rotation à clarifier avant la clôture R5.', 'Capture 13 sept')
+  push('James Justin', 'DOUTE', 'Points R4 non comptés à la capture (match vs Newcastle pas encore joué) — vérifie son statut et son score final.', 'Capture 13 sept')
+  push('Yoane Wissa', 'DOUTE', 'Match vs Leeds en direct à la capture — ses points R4 finaux sont à vérifier dans l’app.', 'Capture 13 sept')
+  push('Bruno Fernandes', 'SURVEILLER', 'Seulement 4 pts lors du derby perdu 0-1 — surveille la forme de Man United sur R5-R6.', 'Capture 13 sept + résultat vérifié')
+  push('John Egan', 'GARDER', '1 pt en R4 mais cité officiellement parmi les défenseurs en forme du jeu ; la défense de Hull (avec Ajayi) est la défense budget en forme. 4,2 M€, 2,5 % détention : profil différentiel à conserver.', 'Article officiel Picks R4')
+  return flags
+}
+
+// ── Cibles marché (prix 100% sourcés article officiel) ────────
+export async function getMarketTargets(): Promise<MarketTarget[]> {
+  const t = await getTeam()
+  const squadIds = new Set([...t.starters, ...t.bench].map((p) => p.id))
+  const players = await db.player.findMany({ where: { price: { not: null } } })
+  const fixturesR5 = new Map((await db.fixture.findMany({ where: { round: 5 } })).map((f) => [f.club, f]))
+  const targets = players
+    .filter((p) => !squadIds.has(p.id))
+    .map((p) => {
+      const fx = p.clubConfirmed ? fixturesR5.get(p.club) : undefined
+      const dif = fx ? fixtureDifficulty(fx.club, fx.opponent, fx.isHome) : null
+      let rationale = ''
+      if (fx && dif) rationale = `R5 ${fixtureLabel({ opponent: fx.opponent, isHome: fx.isHome })} — ${dif.difficulty}`
+      else rationale = 'Fixture R5 non publiée'
+      return {
+        playerId: p.id, name: p.name, club: p.club, position: p.position as Pos,
+        price: p.price as number, ownership: p.ownership ?? 0, formNote: p.formNote, rationale,
+      }
+    })
+  const rankOrder = ['FACILE', 'MOYEN', 'DIFFICILE', 'INCONNU']
+  targets.sort((a, b) => {
+    const da = rankOrder.indexOf(a.rationale.split(' — ')[1]?.split(' ')[0] ?? 'INCONNU')
+    const dbv = rankOrder.indexOf(b.rationale.split(' — ')[1]?.split(' ')[0] ?? 'INCONNU')
+    return da - dbv || b.ownership - a.ownership
+  })
+  return targets
+}
+
+// ── Alertes (faits réels uniquement) ──────────────────────────
+export async function getAlerts(): Promise<Alert[]> {
+  const alerts: Alert[] = [
+    {
+      level: 'HOT',
+      title: 'nik Leroy a frappé fort en R4',
+      detail: '108 pts pour nik Leroy contre 71 pour toi cette journée : −37 pts d’écart en une seule journée. C’est le seul score rival individuel connu pour l’instant.',
+      source: 'Capture classement 13 sept 21:22',
+    },
+    {
+      level: 'WARN',
+      title: '2 points R4 encore incertains dans ton XI',
+      detail: 'Justin (match vs Newcastle pas joué à la capture) et Wissa (match vs Leeds en direct) : vérifie leurs points finaux R4 dans l’app et envoie la correction si besoin.',
+      source: 'Capture équipe 13 sept 21:45',
+    },
+    {
+      level: 'WARN',
+      title: 'Khusanov : 0 pt, pas entré en jeu au derby',
+      detail: 'Risque de rotation City à clarifier. Sa fixture R5 (vs Sunderland à domicile si le club est confirmé) reste favorable — pas de vente paniquée, mais surveille les compositions.',
+      source: 'Capture équipe 13 sept + derby vérifié',
+    },
+    {
+      level: 'INFO',
+      title: 'R5 — 18 septembre : 2 transferts gratuits',
+      detail: 'Règle officielle 2026/27 : 2 transferts gratuits par journée, cumulables jusqu’à 5. Au-delà : −5 pts par transfert supplémentaire. Tokens : max 1 par journée.',
+      source: 'Article officiel What’s New 2026/27',
+    },
+    {
+      level: 'INFO',
+      title: 'Budget : 44,3 M€ confirmés, 9 prix à confirmer',
+      detail: '6 de tes 15 joueurs ont un prix sourcé officiellement (44,3 M€). Pour les 9 autres, vérifie ton budget réel et tes valeurs dans l’app avant tout transfert — aucun prix n’est inventé ici.',
+      source: 'Article officiel + capture équipe',
+    },
+    {
+      level: 'INFO',
+      title: 'Ta marge sur la 5e place : 1 point',
+      detail: 'Zarés JR est à 283, toi à 284. La lutte pour ne pas finir dernier se joue à rien — chaque journée compte.',
+      source: 'Capture classement 13 sept 21:22',
+    },
+  ]
+  return alerts
+}
+
+// ── Ligue réelle ──────────────────────────────────────────────
+export async function getLeague(): Promise<LeagueView> {
+  const managers = await db.manager.findMany({ orderBy: { sortOrder: 'asc' }, include: { scores: true } })
+  const rows: StandingRow[] = managers.map((m) => {
+    const total = m.scores.find((s) => s.round === 4)?.totalAfter ?? null
+    const r4 = m.scores.find((s) => s.round === 4)?.points ?? null
+    const historyKnown = m.scores.filter((s) => s.points != null).length > 1
+    return {
+      rank: 0, name: m.name, isUser: m.isUser, total, r4,
+      r4Known: r4 != null, historyKnown,
+    }
+  })
+  rows.sort((a, b) => (b.total ?? 0) - (a.total ?? 0))
+  rows.forEach((r, i) => { r.rank = i + 1 })
+  const me = rows.find((r) => r.isUser)!
+  const leader = rows[0]
+  const last = rows[rows.length - 1]
+  return {
+    name: 'Le fond de la classe',
+    season: '2026/27',
+    standings: rows,
+    myRank: me.rank,
+    gapToLeader: (me.total ?? 0) - (leader.total ?? 0),
+    gapToLast: (me.total ?? 0) - (last.total ?? 0),
+    leaderName: leader.name,
+    averageR4Displayed: 64.1,
+    bestR4Displayed: 141,
+    missingData: [
+      'Scores journée par journée de nik Leroy, Donatien_10, Aziza FC et Zarés JR (R1→R3)',
+      'Compositions des 4 rivaux (captures de leur XI si l’app le permet)',
+      'Scores R4 individuels de Donatien_10, Aziza FC et Zarés JR',
+    ],
+  }
+}
+
+// ── Fixtures R5→R8 ────────────────────────────────────────────
+export async function getFixtures(): Promise<{ rounds: Record<number, FixtureView[]>; officialRuns: string }> {
+  const fixtures = await db.fixture.findMany({ where: { round: { gte: 5 } }, orderBy: [{ round: 'asc' }, { club: 'asc' }] })
+  const rounds: Record<number, FixtureView[]> = {}
+  for (const f of fixtures) {
+    const { difficulty, note } = fixtureDifficulty(f.club, f.opponent, f.isHome)
+    const arr = (rounds[f.round] ??= [])
+    arr.push({ round: f.round, club: f.club, opponent: f.opponent, isHome: f.isHome, difficulty, note })
+  }
+  return {
+    rounds,
+    officialRuns:
+      'Classement officiel des séries R4-8 (article Sofascore) : 1. Arsenal (le plus clément de très loin) · 2. Manchester City · 3. Chelsea · 4. Newcastle · 5. Liverpool.',
+  }
+}
+
+// ── Vue d'ensemble ────────────────────────────────────────────
+export async function getOverview(): Promise<Overview> {
+  const [league, team, captains, alerts] = await Promise.all([getLeague(), getTeam(), getCaptainPicks(), getAlerts()])
+  const [playersTracked, pricesSourced, fixturesSourced, dataEvents] = await Promise.all([
+    db.player.count(),
+    db.player.count({ where: { price: { not: null } } }),
+    db.fixture.count(),
+    db.dataEvent.count(),
+  ])
+  return {
+    leagueName: league.name,
+    game: 'Sofascore Fantasy Premier League',
+    season: '2026/27',
+    nextRound: 5,
+    nextRoundDate: ROUND_DATES[5],
+    myRank: league.myRank,
+    myTotal: team.totals.total,
+    gapToLeader: league.gapToLeader,
+    gapToLast: league.gapToLast,
+    leaderName: league.leaderName,
+    captainTop: captains[0] ?? null,
+    alerts: alerts.slice(0, 4),
+    budget: {
+      knownSpend: team.knownSpend,
+      knownCount: team.knownPriceCount,
+      unknownCount: team.unknownPriceCount.length,
+    },
+    dataQuality: { playersTracked, pricesSourced, fixturesSourced, dataEvents },
+  }
+}
+
+// ── Contexte de l'assistant IA (données réelles compactes) ────
+export async function getAssistantContext(): Promise<string> {
+  const [league, team, captains, flags, targets, alerts, fixtures] = await Promise.all([
+    getLeague(), getTeam(), getCaptainPicks(), getTransferFlags(), getMarketTargets(), getAlerts(), getFixtures(),
+  ])
+  const xi = team.starters
+    .map((p) => {
+      const pts = p.pointsR4 != null ? `${p.pointsR4} pts` : `points incomplets (${p.pointsNote ?? 'match non joué à la capture'})`
+      const prix = p.price != null ? `${p.price}M€` : 'prix à confirmer'
+      const fx = p.fixtureR5 ? `R5 ${p.fixtureR5.isHome ? 'vs' : '@'} ${p.fixtureR5.opponent} (${p.fixtureR5.difficulty})` : 'fixture R5 inconnue'
+      return `- ${p.name} (${p.club}${p.clubConfirmed ? '' : ', club à confirmer'}, ${p.position}, ${prix}) — R4 : ${pts}${p.captain ? ' [C]' : ''} — ${fx}`
+    })
+    .join('\n')
+  const bench = team.bench
+    .map((p) => `${p.name} (${p.club}, ${p.position}${p.price != null ? `, ${p.price}M€` : ''}) : ${p.pointsR4 ?? 'incomplet'}`)
+    .join(', ')
+  const classement = league.standings
+    .map((r) => `${r.rank}. ${r.name} ${r.total ?? '?'} pts${r.r4 != null ? ` (R4 : ${r.r4})` : ' (R4 individuel à confirmer)'}${r.isUser ? ' ← TOI' : ''}`)
+    .join('\n')
+  const cap = captains.slice(0, 4).map((c) => `${c.rank}. ${c.name} — ${c.fixture} — score ${c.score} (${c.reasons.join(' ; ')})`).join('\n')
+  const flagStr = flags.map((f) => `${f.kind} : ${f.name} — ${f.reason}`).join('\n')
+  const targetStr = targets.slice(0, 6).map((t) => `${t.name} (${t.club}, ${t.position}, ${t.price}M€, ${t.ownership}%) — ${t.rationale}${t.formNote ? ` — ${t.formNote}` : ''}`).join('\n')
+  const fixtureStr = Object.entries(fixtures.rounds)
+    .map(([r, arr]) => `R${r} : ${arr.map((f) => `${f.club} ${f.isHome ? 'vs' : '@'} ${f.opponent} [${f.difficulty}]`).join(' | ')}`)
+    .join('\n')
+
+  return `Tu es le coach fantasy personnel de l'utilisateur (équipe VITAL_GDB) dans sa VRAIE ligue privée Sofascore Fantasy Premier League 2026/27 « Le fond de la classe » (5 gestionnaires). Toutes les données ci-dessous sont RÉELLES et sourcées (captures de son app Sofascore du 13/09/2026 + articles officiels Sofascore).
+
+RÈGLES EN VIGUEUR (officielles 2026/27) : budget 100 M€, 15 joueurs (2G/5D/5M/3A), 2 transferts gratuits/journée (cumul max 5, au-delà −5 pts), capitaine ×2, tokens : Triple Captain ×3 (1/saison), Quick Fix (2/saison), Rebuild Squad (2/saison, 1 par mi-saison), max 1 token/journée. Scoring : ratings Sofascore + 30+ catégories.
+
+CLASSEMENT RÉEL après R4 :
+${classement}
+Moyenne R4 affichée dans l'app : 64,1 · meilleur score affiché : 141 (probablement global, à confirmer).
+
+TON XI RÉEL (points R4 de la capture, formation ${team.formation}) :
+${xi}
+BANC : ${bench}
+Budget confirmé : ${team.knownSpend} M€ sur ${team.knownPriceCount} joueurs ; prix à confirmer pour : ${team.unknownPriceCount.join(', ')}.
+
+FIXTURES OFFICIELLES (article Sofascore) :
+${fixtureStr}
+${fixtures.officialRuns}
+Dates : R5 18 sept · R6 10 oct · R7 17 oct · R8 23 oct.
+
+SUGGESTIONS CAPITAINE R5 (moteur, transparent) :
+${cap}
+
+VIGILANCE EFFECTIF :
+${flagStr}
+
+CIBLES MARCHÉ SOURCÉES (prix officiels) :
+${targetStr}
+
+ALERTES RÉELLES :
+${alerts.map((a) => `- [${a.level}] ${a.title} : ${a.detail}`).join('\n')}
+
+DONNÉES MANQUANTES (dire « à confirmer » si l'utilisateur demande dessus, ne JAMAIS inventer) :
+${league.missingData.map((m) => `- ${m}`).join('\n')}
+- Compositions des rivaux (l'app Sofascore est derrière une connexion : l'utilisateur enverra des captures)
+
+CONSIGNE ABSOLUE : n'invente AUCUN chiffre (prix, points, %, fixtures). Si une donnée manque, dis explicitement « à confirmer » et propose de la vérifier via une capture. Réponds en français, direct et actionnable (max ~180 mots), emojis avec parcimonie (🟢🟡🔴🧢💎). Donne toujours ta recommandation + les raisons sourcées.`
 }

@@ -1,0 +1,43 @@
+{
+  "meta": {
+    "source": "Article officiel Sofascore: 'Premier League Fantasy Picks: Round 4' (11 sept 2026, sofascore.com/news/premier-league-fantasy-picks-round-4-2)",
+    "lu_le": "2026-09-14 via navigateur headless",
+    "confiance": "PRIX ET OWNERSHIP 100% OFFICIELS - utilisables tels quels",
+    "note_budget": "Squad 15 joueurs officiel = 99,4M€ sur 100M€ (plafond confirmé)"
+  },
+  "joueurs": [
+    { "nom": "David Raya", "club": "Arsenal", "poste": "G", "prix": 6.6, "ownership": 28.8, "note_officielle": "GK le plus sélectionné du jeu, en forme" },
+    { "nom": "James Trafford", "club": "Leeds United", "poste": "G", "prix": 4.6, "ownership": 11.2, "note_officielle": "Titulaire indiscutable Leeds, marque des points de arrêts" },
+    { "nom": "Joško Gvardiol", "club": "Manchester City", "poste": "D", "prix": 6.8, "ownership": 17.4, "note_officielle": "Un des défenseurs en forme de la ligue, menace offensive" },
+    { "nom": "Ben White", "club": "Arsenal", "poste": "D", "prix": 5.2, "ownership": 4.5, "note_officielle": "Meilleur rapport qualité/prix défensif du jeu actuellement" },
+    { "nom": "Lewis Hall", "club": "Newcastle United", "poste": "D", "prix": 5.8, "ownership": 11.1, "note_officielle": "Latéral en forme cette saison" },
+    { "nom": "John Egan", "club": "Hull City", "poste": "D", "prix": 4.2, "ownership": 2.5, "note_officielle": "Titulaire reconnu Hull, un des défenseurs en forme toute catégorie" },
+    { "nom": "Semi Ajayi", "club": "Hull City", "poste": "D", "prix": 4.4, "ownership": 5.9, "note_officielle": "L'autre moitié d'une arrière-garde Hull en forme" },
+    { "nom": "Dominik Szoboszlai", "club": "Liverpool", "poste": "M", "prix": 8.0, "ownership": 21.6, "note_officielle": "Source de points fiable pour Liverpool" },
+    { "nom": "Martin Ødegaard", "club": "Arsenal", "poste": "M", "prix": 7.8, "ownership": 9.7, "note_officielle": "LE milieu en forme de toute la ligue actuellement" },
+    { "nom": "Cody Gakpo", "club": "Liverpool", "poste": "M", "prix": 7.7, "ownership": 6.4, "note_officielle": "Un des joueurs en forme du jeu sur le dernier mois" },
+    { "nom": "Morgan Rogers", "club": "Chelsea", "poste": "M", "prix": 7.4, "ownership": 16.0, "note_officielle": "Impliqué dans les buts en série depuis son transfert" },
+    { "nom": "Anthony Elanga", "club": "Newcastle United", "poste": "M", "prix": 5.3, "ownership": 8.7, "note_officielle": "Ailier en forme à prix cassé" },
+    { "nom": "Erling Haaland", "club": "Manchester City", "poste": "A", "prix": 12.0, "ownership": 75.5, "note_officielle": "Le plus cher et le plus détenu du jeu (75,5%)" },
+    { "nom": "João Pedro", "club": "Chelsea", "poste": "A", "prix": 7.9, "ownership": 38.2, "note_officielle": "L'attaquant en forme de toute la division" },
+    { "nom": "Yoane Wissa", "club": "Newcastle United", "poste": "A", "prix": 5.7, "ownership": 12.4, "note_officielle": "Accès économique à l'attaque de Newcastle, bonne forme de début de saison" }
+  ],
+  "fixtures_R4_R8": {
+    "Arsenal": { "R4": "at Sunderland", "R5": "at Brighton", "R6": "vs Leeds United (H)", "R7": "at Nottm Forest", "R8": "vs Everton (H)" },
+    "Manchester City": { "R4": "at Man Utd", "R5": "vs Sunderland (H)", "R6": "at Liverpool", "R7": "vs Ipswich Town (H)", "R8": "at Aston Villa" },
+    "Chelsea": { "R4": "vs Hull City (H)", "R5": "at Brentford", "R6": "vs Bournemouth (H)", "R7": "at Everton", "R8": "vs Tottenham (H)" },
+    "Newcastle United": { "R4": "at Leeds United", "R5": "vs Hull City (H)", "R6": "at Coventry City", "R7": "vs Aston Villa (H)", "R8": "at Crystal Palace" },
+    "Liverpool": { "R4": "vs Fulham (H)", "R5": "at Bournemouth", "R6": "vs Man City (H)", "R7": "at Brentford", "R8": "vs Brighton (H)" },
+    "source": "Tableau officiel 'Best fixture runs, Rounds 4-8' de l'article"
+  },
+  "classement_fixtures_officiel": {
+    "ordre_meilleures_series_R4_R8": ["Arsenal (le plus clément de très loin)", "Manchester City", "Chelsea", "Newcastle United", "Liverpool"],
+    "source": "Texte officiel de l'article"
+  },
+  "forme_officielle": {
+    "joueurs_en_forme": ["Cody Gakpo", "Morgan Rogers", "João Pedro", "Ben White (meilleure valeur)", "Ødegaard (milieu en forme n°1)", "Gvardiol (défenseur en forme)", "Egan (défenseur en forme)", "Elanga (ailier en forme)", "Wissa (bonne forme)"],
+    "defense_budget_en_forme": ["Hull City (Egan + Ajayi)"]
+  },
+  "clubs_promus_2026_27": ["Leeds United", "Hull City", "Coventry City"],
+  "clubs_connus_pl": ["Arsenal", "Manchester City", "Chelsea", "Newcastle United", "Liverpool", "Manchester United", "Sunderland", "Brighton", "Nottm Forest", "Everton", "Bournemouth", "Brentford", "Ipswich Town", "Aston Villa", "Fulham", "Tottenham", "Crystal Palace"]
+}

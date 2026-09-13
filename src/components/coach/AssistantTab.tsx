@@ -1,101 +1,126 @@
 'use client'
 
-import { useRef, useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { useEffect, useRef, useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
-import ReactMarkdown from 'react-markdown'
-import { cn } from '@/lib/utils'
+import { Input } from '@/components/ui/input'
+import { Skeleton } from '@/components/ui/skeleton'
+import { SendHorizonal, Sparkles } from 'lucide-react'
 
 interface Msg { role: 'user' | 'assistant'; content: string }
 
-const SUGGESTIONS = [
-  'Qui dois-je mettre capitaine cette journée ?',
-  'Qui dois-je mettre titulaire ?',
-  'Quel transfert faire en priorité ?',
-  'Un différentiel poursurprendre mes rivaux ?',
-  'Qui est à risque de rotation dans mon équipe ?',
+const QUICK = [
+  'Qui mettre capitaine pour la R5 ?',
+  'Qui dois-je transférer avant la clôture ?',
+  'Analyse nik Leroy : comment rattraper 37 points ?',
+  'Comment marchent les tokens ?',
 ]
 
-export function AssistantTab({ nextGw }: { nextGw: number }) {
-  const [messages, setMessages] = useState<Msg[]>([
-    { role: 'assistant', content: `👋 Coach, je suis ton copilote pour la journée ${nextGw}. J'ai accès à ton équipe, aux projections du moteur, au calendrier et aux équipes de tes 4 rivaux. Que veux-tu décider ?` },
+export default function AssistantTab() {
+  const [msgs, setMsgs] = useState<Msg[]>([
+    {
+      role: 'assistant',
+      content:
+        'Salut coach 👋 Je suis branché sur TES données réelles : ton XI Vital_GDB (capture du 13 sept), le classement officiel du fond de la classe, les prix et fixtures de l’article officiel. Demande-moi capitaine, transferts, rivaux, règles — je n’invente rien : si une donnée manque, je te dis « à confirmer ».',
+    },
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const scrollRef = useRef<HTMLDivElement>(null)
+  const endRef = useRef<HTMLDivElement>(null)
 
-  const send = async (text: string) => {
-    const msg = text.trim()
-    if (!msg || loading) return
-    setError(null)
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [msgs, loading])
+
+  async function send(text: string) {
+    const message = text.trim()
+    if (!message || loading) return
+    const history = msgs.filter((m) => m !== msgs[0]).slice(-6)
+    setMsgs((m) => [...m, { role: 'user', content: message }])
     setInput('')
-    const nextHistory = [...messages, { role: 'user' as const, content: msg }]
-    setMessages([...nextHistory, { role: 'assistant', content: '…' }])
     setLoading(true)
-    setTimeout(() => scrollRef.current?.scrollTo({ top: 999999, behavior: 'smooth' }), 50)
     try {
-      const history = messages.slice(-6).map((m) => ({ role: m.role, content: m.content }))
       const res = await fetch('/api/coach/assistant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg, history }),
+        body: JSON.stringify({ message, history }),
       })
-      const json = await res.json()
-      if (!res.ok || json.error) throw new Error(json.error || 'Erreur')
-      setMessages([...nextHistory, { role: 'assistant', content: json.reply }])
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "L'assistant n'a pas répondu")
-      setMessages(nextHistory)
+      const d = await res.json()
+      setMsgs((m) => [...m, { role: 'assistant', content: d.reply ?? `⚠️ ${d.error ?? 'Erreur inconnue'}` }])
+    } catch {
+      setMsgs((m) => [...m, { role: 'assistant', content: '⚠️ Connexion perdue avec l’assistant. Réessaie.' }])
     } finally {
       setLoading(false)
-      setTimeout(() => scrollRef.current?.scrollTo({ top: 999999, behavior: 'smooth' }), 50)
     }
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div ref={scrollRef} className="max-h-[58vh] min-h-[320px] space-y-3 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950/60 p-3">
-        {messages.map((m, i) => (
-          <div key={i} className={cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')}>
-            <div className={cn(
-              'max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm leading-relaxed',
-              m.role === 'user' ? 'rounded-br-sm bg-emerald-600/90 text-white' : 'rounded-bl-sm border border-slate-800 bg-slate-900/90 text-slate-200',
-              m.content === '…' && 'animate-pulse',
-            )}>
-              {m.content === '…' ? '🧠 Analyse en cours…' : m.role === 'user' ? m.content : (
-                <div className="space-y-1.5 [&_li]:ml-4 [&_li]:list-disc [&_ol_li]:list-decimal [&_p]:m-0 [&_strong]:font-bold [&_strong]:text-emerald-300">
-                  <ReactMarkdown>{m.content}</ReactMarkdown>
-                </div>
-              )}
+    <Card className="flex h-[calc(100vh-14rem)] min-h-[420px] flex-col">
+      <CardContent className="flex min-h-0 flex-1 flex-col p-0">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4">
+          {msgs.map((m, i) => (
+            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div
+                className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
+                  m.role === 'user'
+                    ? 'rounded-br-sm bg-violet-600 text-white'
+                    : 'rounded-bl-sm border border-border bg-zinc-900/60 text-zinc-100'
+                }`}
+              >
+                {m.content}
+              </div>
             </div>
+          ))}
+          {loading && (
+            <div className="flex justify-start">
+              <div className="rounded-2xl rounded-bl-sm border border-border bg-zinc-900/60 px-4 py-3">
+                <Skeleton className="h-3 w-32" />
+              </div>
+            </div>
+          )}
+          <div ref={endRef} />
+        </div>
+
+        <div className="border-t border-border p-3">
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {QUICK.map((q) => (
+              <button
+                key={q}
+                onClick={() => send(q)}
+                disabled={loading}
+                className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 text-[11px] font-medium text-violet-300 transition hover:bg-violet-500/20 disabled:opacity-50"
+              >
+                {q}
+              </button>
+            ))}
           </div>
-        ))}
-      </div>
-
-      <div className="flex flex-wrap gap-1.5">
-        {SUGGESTIONS.map((s) => (
-          <button key={s} onClick={() => send(s)} disabled={loading} className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs text-slate-300 transition hover:border-emerald-500/60 hover:text-emerald-300 disabled:opacity-50">
-            {s}
-          </button>
-        ))}
-      </div>
-
-      {error && <Card className="border-red-500/40 bg-red-500/10"><CardContent className="p-3 text-xs text-red-300">{error} — réessaie dans un instant.</CardContent></Card>}
-
-      <form onSubmit={(e) => { e.preventDefault(); send(input) }} className="flex gap-2">
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="Pose ta question de coach…"
-          className="h-11 flex-1 border-slate-800 bg-slate-900/80"
-          disabled={loading}
-        />
-        <Button type="submit" disabled={loading || !input.trim()} className="h-11 bg-emerald-600 px-5 text-white hover:bg-emerald-500">
-          {loading ? '…' : 'Envoyer'}
-        </Button>
-      </form>
-    </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              send(input)
+            }}
+            className="flex gap-2"
+          >
+            <Input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Pose ta question de coach…"
+              disabled={loading}
+              className="flex-1"
+            />
+            <button
+              type="submit"
+              disabled={loading || !input.trim()}
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-violet-600 text-white transition hover:bg-violet-500 disabled:opacity-40"
+              aria-label="Envoyer"
+            >
+              <SendHorizonal className="h-4 w-4" />
+            </button>
+          </form>
+          <p className="mt-1.5 flex items-center gap-1 text-[10px] text-zinc-500">
+            <Sparkles className="h-3 w-3" /> Ancré sur tes captures + articles officiels. Chiffres inconnus = « à confirmer », jamais inventés.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   )
 }

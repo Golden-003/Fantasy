@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
@@ -14,12 +14,17 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Fantasy Coach Premier League — Copilote données réelles",
-  description: "Copilote personnel connecté à l'API officielle Fantasy Premier League : ton équipe réelle, ta ligue privée, projections, verdicts, alertes, war room et assistant IA.",
-  keywords: ["Fantasy", "Premier League", "FPL", "coach", "projections", "transferts", "données réelles"],
+  title: "Fantasy Coach — Le fond de la classe (Sofascore 2026/27)",
+  description:
+    "Copilote de coaching pour ta ligue privée Sofascore Fantasy Premier League : équipe réelle Vital_GDB, classement réel, prix et fixtures officiels, capitaine, transferts et assistant IA ancré sur les données réelles.",
+  keywords: ["Sofascore Fantasy", "Premier League", "coach", "Le fond de la classe", "Vital_GDB", "données réelles"],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#09090b",
 };
 
 export default function RootLayout({
@@ -28,7 +33,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="fr" className="dark" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >

@@ -7,12 +7,98 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Paramètres de connexion aux DONNÉES RÉELLES (API officielle Fantasy Premier League).
-// Aucune donnée fictive : tout le contenu vient de https://fantasy.premierleague.com/api
-model Settings {
-  id        String   @id @default("default")
-  teamId    Int? // ID FPL de mon équipe réelle (entry id, visible dans l'URL du site)
-  leagueId  Int? // ID de ma ligue privée classique (visible dans l'URL du classement)
-  cookie    String? // (optionnel) cookie de session FPL pour l'accès temps réel /my-team
-  updatedAt DateTime @updatedAt
+// ═══════════════════════════════════════════════════════════════
+// SOFASCORE FANTASY COACH — BASE DE DONNÉES 100% RÉELLE
+// Jeu: Sofascore Fantasy Premier League 2026/27
+// Ligue privée: « Le fond de la classe » (5 managers)
+// ZÉRO donnée inventée : chaque enregistrement porte sa SOURCE.
+// ─────────────────────────────────────────────────────────────────
+// Sources:
+//  - CAPTURE-CLASSEMENT-13SEPT : capture onglet Ligues (21:22)
+//  - CAPTURE-EQUIPE-13SEPT     : capture onglet Mon équipe (21:45)
+//  - ARTICLE-PICKS-R4          : article officiel Sofascore 11/09/2026
+//  - ARTICLE-NOUVEAUTES-2627   : article officiel règles 28/08/2026
+// ═══════════════════════════════════════════════════════════════
+
+// Ligue privée réelle
+model League {
+  id      String    @id @default("lefond")
+  name    String // « Le fond de la classe »
+  game    String // Sofascore Fantasy Premier League
+  season  String // 2026/27
+  budget  Float // 100 (M€)
+  managers Manager[]
+}
+
+// Les 5 gestionnaires réels de la ligue
+model Manager {
+  id        String  @id @default(cuid())
+  slug      String  @unique // vital_gdb, nik_leroy…
+  name      String  // nom d'équipe affiché dans l'app Sofascore
+  isUser    Boolean @default(false)
+  sortOrder Int
+  leagueId  String  @default("lefond")
+  league    League  @relation(fields: [leagueId], references: [id])
+  scores    RoundScore[]
+}
+
+// Points réels par journée (ce qui a été vu sur les captures)
+model RoundScore {
+  id         String  @id @default(cuid())
+  managerId  String
+  round      Int
+  points     Int? // null = journée pas encore enregistrée dans l'app
+  totalAfter Int? // cumul officiel affiché après cette journée
+  source     String
+  manager    Manager @relation(fields: [managerId], references: [id])
+
+  @@unique([managerId, round])
+}
+
+// Joueurs réels — prix/ownership uniquement si sourcés officiellement
+model Player {
+  id          String  @id @default(cuid())
+  name        String
+  club        String
+  clubConfirmed Boolean @default(true) // false = badge illisible sur capture
+  position    String // G | D | M | A
+  price       Float? // null = prix à confirmer (JAMAIS inventé)
+  ownership   Float? // % détention dans le jeu, null = inconnu
+  priceSource String?
+  formNote    String? // mention de forme issue de l'article officiel
+  slots       SquadSlot[]
+}
+
+// Effectif réel de Vital_GDB (capture 13 sept 21:45)
+model SquadSlot {
+  id           String  @id @default(cuid())
+  playerId     String  @unique
+  role         String // TITULAIRE | BANC
+  slotPosition String // G | D | M | A
+  captain      Boolean @default(false)
+  round        Int     @default(4)
+  pointsR4     Int? // points R4 visibles sur la capture (null = match pas joué)
+  pointsNote   String? // ex: « match vs Newcastle pas encore joué à la capture »
+  player       Player  @relation(fields: [playerId], references: [id])
+}
+
+// Fixtures réelles R4→R8 (article officiel « Best fixture runs R4-8 »)
+model Fixture {
+  id       String @id @default(cuid())
+  round    Int
+  club     String
+  opponent String
+  isHome   Boolean
+  source   String
+
+  @@unique([round, club])
+}
+
+// Journal d'ingestion : traçabilité complète des données réelles
+model DataEvent {
+  id     String @id @default(cuid())
+  at     String // ISO
+  kind   String // CAPTURE | ARTICLE | REGLE | SAISON
+  title  String
+  detail String
 }
