@@ -46,3 +46,20 @@ Stage Summary:
 - Fichiers clés : src/lib/fpl/client.ts, src/lib/coach/engine.ts, src/app/api/settings/route.ts, src/components/coach/SetupDialog.tsx, page.tsx rewirée
 - Ancien seed de données fictives supprimé (scripts/seed.ts effacé, tables drop)
 - Limites réelles documentées : Sofascore sans API publique (403) → notes dérivées du BPS FPL ; FT estimés sans cookie (signalés « ~ »)
+
+---
+Task ID: 1
+Agent: Main agent (Super Z)
+Task: Clarification FPL vs Sofascore Fantasy + test réel d'accès aux données Sofascore
+
+Work Log:
+- Test curl direct api.sofascore.com + www.sofascore.com/api/v1 → 403 Forbidden (Cloudflare)
+- Test navigateur headless (agent-browser): pages web Sofascore OK, images OK, mais API → 403 "challenge" (Cloudflare Turnstile), persistant même après tentative de vérification humaine
+- Page https://www.sofascore.com/fantasy existe, nécessite connexion (Google/Facebook/Apple) + challenge Cloudflare
+- Web search: règles RÉELLES Sofascore Fantasy 2026/27 confirmées (€100M, 15 joueurs, 5 transferts gratuits/sem, +3/-2 note, tokens, 30+ catégories stats basées sur les ratings Sofascore)
+- Fait la distinction claire: Sofascore Fantasy ≠ FPL (Fantasy Premier League) — l'utilisateur joue à Sofascore Fantasy
+
+Stage Summary:
+- VERDICT TECHNIQUE: API Sofascore protégée par Cloudflare Turnstile → inaccessible depuis un serveur/datacenter. Accès réaliste uniquement depuis la machine de l'utilisateur avec sa vraie session navigateur (connecteur local ou extension)
+- Règles réelles du jeu 2026/27 documentées et sourcées (articles Sofascore août 2026)
+- Prochaine étape: obtenir de l'utilisateur nom de ligue/équipe/rivaux + préparer l'architecture connecteur local
