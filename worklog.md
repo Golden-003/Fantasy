@@ -80,3 +80,22 @@ Work Log:
 Stage Summary:
 - Règles PL Sofascore Fantasy 2026/27 désormais 100% sourcées officiellement et correspondant à ce que dit l'utilisateur (2 transferts gratuits)
 - Données réelles Round 4 disponibles (joueurs, prix, ownership, fixtures) via articles officiels Sofascore (accessibles par navigateur, API toujours bloquée Cloudflare)
+
+---
+Task ID: 3
+Agent: Main agent (Super Z)
+Task: Rédaction du cahier des charges officiel .docx avec les données réelles de la ligue
+
+Work Log:
+- Lu la capture utilisateur (Screenshot_2026-09-13-21-22-48-478): ligue « Le fond de la classe » (PL), classement réel après J4: nik Leroy 333 (108 en J4, Top manager), Donatien_10 318, Aziza FC 295, Vital_GDB 284 (équipe utilisateur, surlignée), Zarés JR 283
+- Tentative de lecture du profil public 628e980cf3bea6fd72a7f555 via navigateur → mur de connexion (données derrière compte, comme prévu)
+- Skill docx chargé intégralement (SKILL.md, create.md, design-system.md, common-rules.md, docx-js-core.md, report.md, toc.md)
+- Graphique matplotlib (classement réel, accent sur Vital_GDB) → chart_ligue.png
+- Génération docx R4/GO-1 (recette cover validée), 3 sections (couverture / TOC romain / corps arabe), 6 chapitres, 24 points de spec, 6 tableaux, 1 figure
+- Post-traitement: add_toc_placeholders.py (43 entrées, exit 0), patch pgNumType, postcheck.py → 0 erreur, 1 avertissement attendu (PageBreak obligatoire après TOC)
+- QA visuelle LibreOffice→PDF: couverture, TOC, corps et tableaux conformes; PDF copié dans download/ (pratique mobile)
+
+Stage Summary:
+- LIVRABLES: /home/z/my-project/download/Cahier_des_Charges_Sofascore_Fantasy_Coach.docx (+ .pdf)
+- Contenu: règles officielles 2026/27 sourcées, classement réel ligue, marché réel J4, 24 points, constat Cloudflare + 3 options de collecte (connecteur local recommandé), critères d'acceptation
+- En attente utilisateur: D1 confirmation Vital_GDB, D2 mapping rivaux (frère/amis), D3 validation connecteur local, D4 capture écran « Mon équipe »
