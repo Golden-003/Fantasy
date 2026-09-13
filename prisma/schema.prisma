@@ -1,0 +1,64 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Données source (couche Data Provider / Normalisation) ───────────────
+
+model Team {
+  id        String @id
+  name      String
+  shortName String
+  att       Int // force offensive 1-5
+  def       Int // force défensive 1-5
+}
+
+model Player {
+  id           String  @id @default(cuid())
+  name         String
+  teamId       String
+  position     String // GK | DEF | MID | FWD
+  price        Float
+  quality      Int // 0-100, pilote la génération des stats
+  ownership    Float // % de ligue qui le possède
+  status       String // FIT | INJURED | SUSPENDED | DOUBTFUL
+  injuryNote   String?
+  rotationRisk String // LOW | MEDIUM | HIGH
+  trend        String // UP | DOWN | STABLE
+  rating       Float // note Sofascore moyenne saison
+  statsJson    String // {apps, minutes, starts, goals, assists, xg, xa, shots, sot, bigChances, keyPasses, dribbles, duelsWon, tackles, interceptions, recoveries, cleanSheets, yellow, red}
+  last5Json    String // [{gw, oppShort, venue, rating, minutes, goals, assists}]
+}
+
+model Fixture {
+  id         String @id
+  gw         Int
+  homeTeamId String
+  awayTeamId String
+  date       String
+}
+
+// ─── Équipes Fantasy (moi + 4 rivaux de la ligue privée) ─────────────────
+
+model FantasyTeam {
+  id            String  @id @default(cuid())
+  ownerName     String
+  isMine        Boolean
+  bank          Float
+  transfersLeft Int
+  totalPoints   Int
+  teamName      String
+}
+
+model SquadSlot {
+  id            String @id
+  fantasyTeamId String
+  playerId      String
+  slot          Int
+  isStarter     Boolean
+  isCaptain     Boolean
+}
