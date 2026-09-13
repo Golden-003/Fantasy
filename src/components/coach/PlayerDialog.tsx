@@ -34,13 +34,14 @@ export function PlayerDialog({ player, open, onClose, nextGw }: { player: Player
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCell label="Prix" value={`${fmt(player.price)}M`} />
-          <StatCell label="Note saison" value={fmt(player.rating)} />
-          <StatCell label="Forme (5 m.)" value={fmt(player.form)} />
+          <StatCell label="Pts / match" value={fmt(player.rating)} />
+          <StatCell label="Forme (5 j.)" value={fmt(player.form)} />
           <StatCell label="Projection J" value={player.status === 'FIT' || player.status === 'DOUBTFUL' ? fmt(player.projection) : '0,0'} />
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-          <Badge variant="outline" className="border-slate-700 text-slate-300">Possession : {fmt(player.ownership)}%</Badge>
+          <Badge variant="outline" className="border-slate-700 text-slate-300">Possession FPL : {fmt(player.ownership)}%</Badge>
+          <Badge variant="outline" className="border-emerald-500/40 bg-emerald-500/10 text-emerald-300">Ép_next officiel J+1 : {fmt(player.epNext)}</Badge>
           <Badge variant="outline" className="border-slate-700 text-slate-300">Minutes : {player.minutesPct}%</Badge>
           <Badge variant="outline" className="border-slate-700 text-slate-300">Rotation : {player.rotationRisk === 'LOW' ? 'faible' : player.rotationRisk === 'MEDIUM' ? 'moyenne' : 'élevée'}</Badge>
           <Badge variant="outline" className="border-slate-700 text-slate-300">Tendance <TrendArrow trend={player.trend} /></Badge>
@@ -71,7 +72,7 @@ export function PlayerDialog({ player, open, onClose, nextGw }: { player: Player
                 <tr>
                   <th className="px-2 py-1.5 text-left font-medium">J</th>
                   <th className="px-2 py-1.5 text-left font-medium">Adv.</th>
-                  <th className="px-2 py-1.5 text-right font-medium">Note</th>
+                  <th className="px-2 py-1.5 text-right font-medium" title="Note BPS FPL : 4 + bps/10 (max 10)">Note*</th>
                   <th className="px-2 py-1.5 text-right font-medium">Min.</th>
                   <th className="px-2 py-1.5 text-right font-medium">B</th>
                   <th className="px-2 py-1.5 text-right font-medium">P</th>
@@ -94,30 +95,27 @@ export function PlayerDialog({ player, open, onClose, nextGw }: { player: Player
         </div>
 
         <div>
-          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Statistiques saison</div>
+          <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-slate-400">Statistiques saison (officielles FPL)</div>
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-            <StatCell label="Matchs" value={s.apps} />
-            <StatCell label="Minutes" value={s.minutes} />
             <StatCell label="Titularisations" value={s.starts} />
+            <StatCell label="Minutes" value={s.minutes} />
             {!isGk && <StatCell label="Buts" value={s.goals} />}
             {!isGk && <StatCell label="Passes dé." value={s.assists} />}
             {!isGk && <StatCell label="xG" value={fmt(s.xg)} />}
             {!isGk && <StatCell label="xA" value={fmt(s.xa)} />}
-            {!isGk && <StatCell label="Tirs" value={s.shots} />}
-            {!isGk && <StatCell label="Tirs cadrés" value={s.sot} />}
-            {!isGk && <StatCell label="Grosses occ." value={s.bigChances} />}
-            {!isGk && <StatCell label="Passes clés" value={s.keyPasses} />}
-            {!isGk && <StatCell label="Dribbles" value={s.dribbles} />}
-            {isGk && <StatCell label="Clean sheets" value={s.cleanSheets} />}
-            {!isGk && <StatCell label="Duels gagnés" value={s.duelsWon} />}
+            {!isGk && <StatCell label="xGI" value={fmt(s.xgi)} />}
+            <StatCell label="Clean sheets" value={s.cleanSheets} />
+            {isGk && <StatCell label="Arrêts" value={s.saves} />}
+            <StatCell label="Bonus" value={s.bonus} />
+            <StatCell label="BPS" value={s.bps} />
             <StatCell label="Tacles" value={s.tackles} />
-            <StatCell label="Interceptions" value={s.interceptions} />
+            <StatCell label="Dég.+Int." value={s.cbi} />
             <StatCell label="Ballons réc." value={s.recoveries} />
             <StatCell label="Cartons J/R" value={`${s.yellow}/${s.red}`} />
           </div>
         </div>
 
-        <div className="text-[11px] text-slate-500">Journée suivante : J{nextGw} • Fixture Score = qualité du calendrier sur 5 journées (0-100).</div>
+        <div className="text-[11px] leading-relaxed text-slate-500">Journée suivante : J{nextGw} • Fixture Score = qualité du calendrier sur 5 journées (0-100, FDR officielle FPL). * Note = 4 + BPS/10 (plafonnée à 10) — Sofascore ne propose pas d&apos;API publique, la note est donc dérivée du BPS réel FPL.</div>
       </DialogContent>
     </Dialog>
   )

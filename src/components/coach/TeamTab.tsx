@@ -54,13 +54,13 @@ export function TeamTab({ data, onSelect }: { data: OverviewPayload; onSelect: (
             <ScoreRing score={me.squadScore} />
             <div>
               <div className="text-xs text-slate-400">Note globale</div>
-              <div className="text-sm font-semibold text-slate-100">{me.rank}<sup>e</sup> / 5 au classement</div>
+              <div className="text-sm font-semibold text-slate-100">{me.rank}<sup>e</sup> / {me.leagueSize || 5} au classement</div>
             </div>
           </CardContent>
         </Card>
         <Card className="border-slate-800 bg-slate-900/60"><CardContent className="p-4"><div className="text-xs text-slate-400">Budget en banque</div><div className="text-2xl font-bold text-emerald-400">{fmt(me.bank)}M</div><div className="text-xs text-slate-500">Valeur équipe : {fmt(me.teamValue)}M</div></CardContent></Card>
-        <Card className="border-slate-800 bg-slate-900/60"><CardContent className="p-4"><div className="text-xs text-slate-400">Transferts restants</div><div className="text-2xl font-bold text-slate-100">{me.transfersLeft}</div><div className="text-xs text-slate-500">Journée {data.nextGw} à venir</div></CardContent></Card>
-        <Card className="border-slate-800 bg-slate-900/60"><CardContent className="p-4"><div className="text-xs text-slate-400">Points (saison)</div><div className="text-2xl font-bold text-slate-100">{me.totalPoints}</div><div className="text-xs text-slate-500">Proj. J{data.nextGw} : ~{me.projectedGwPoints} pts</div></CardContent></Card>
+        <Card className="border-slate-800 bg-slate-900/60"><CardContent className="p-4"><div className="text-xs text-slate-400">Transferts restants</div><div className="text-2xl font-bold text-slate-100">{me.transfersLeft}{!me.transfersExact && <span className="text-sm text-slate-500"> ~</span>}</div><div className="text-xs text-slate-500">Journée {data.nextGw} à venir{!me.transfersExact && ' (estimation — ajoute ton cookie pour l’exact)'}</div></CardContent></Card>
+        <Card className="border-slate-800 bg-slate-900/60"><CardContent className="p-4"><div className="text-xs text-slate-400">Points (saison)</div><div className="text-2xl font-bold text-slate-100">{me.totalPoints}</div><div className="text-xs text-slate-500">{data.live ? `🔴 J${data.live.gw} en cours : ${data.live.points} pts (${data.live.remaining} match(s) à jouer)` : `Proj. J${data.nextGw} : ~${me.projectedGwPoints} pts`}</div></CardContent></Card>
         <Card className="col-span-2 border-slate-800 bg-slate-900/60 sm:col-span-1 lg:col-span-2">
           <CardContent className="p-4">
             <div className="text-xs text-slate-400">🧢 Capitaine</div>

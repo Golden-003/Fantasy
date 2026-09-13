@@ -7,58 +7,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ─── Données source (couche Data Provider / Normalisation) ───────────────
-
-model Team {
-  id        String @id
-  name      String
-  shortName String
-  att       Int // force offensive 1-5
-  def       Int // force défensive 1-5
-}
-
-model Player {
-  id           String  @id @default(cuid())
-  name         String
-  teamId       String
-  position     String // GK | DEF | MID | FWD
-  price        Float
-  quality      Int // 0-100, pilote la génération des stats
-  ownership    Float // % de ligue qui le possède
-  status       String // FIT | INJURED | SUSPENDED | DOUBTFUL
-  injuryNote   String?
-  rotationRisk String // LOW | MEDIUM | HIGH
-  trend        String // UP | DOWN | STABLE
-  rating       Float // note Sofascore moyenne saison
-  statsJson    String // {apps, minutes, starts, goals, assists, xg, xa, shots, sot, bigChances, keyPasses, dribbles, duelsWon, tackles, interceptions, recoveries, cleanSheets, yellow, red}
-  last5Json    String // [{gw, oppShort, venue, rating, minutes, goals, assists}]
-}
-
-model Fixture {
-  id         String @id
-  gw         Int
-  homeTeamId String
-  awayTeamId String
-  date       String
-}
-
-// ─── Équipes Fantasy (moi + 4 rivaux de la ligue privée) ─────────────────
-
-model FantasyTeam {
-  id            String  @id @default(cuid())
-  ownerName     String
-  isMine        Boolean
-  bank          Float
-  transfersLeft Int
-  totalPoints   Int
-  teamName      String
-}
-
-model SquadSlot {
-  id            String @id
-  fantasyTeamId String
-  playerId      String
-  slot          Int
-  isStarter     Boolean
-  isCaptain     Boolean
+// Paramètres de connexion aux DONNÉES RÉELLES (API officielle Fantasy Premier League).
+// Aucune donnée fictive : tout le contenu vient de https://fantasy.premierleague.com/api
+model Settings {
+  id        String   @id @default("default")
+  teamId    Int? // ID FPL de mon équipe réelle (entry id, visible dans l'URL du site)
+  leagueId  Int? // ID de ma ligue privée classique (visible dans l'URL du classement)
+  cookie    String? // (optionnel) cookie de session FPL pour l'accès temps réel /my-team
+  updatedAt DateTime @updatedAt
 }

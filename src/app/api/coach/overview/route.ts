@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getCoachData } from '@/lib/coach/engine'
+import { getCoachData, NEED_SETUP } from '@/lib/coach/engine'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,9 +12,14 @@ export async function GET() {
       transfers: data.transfers,
       nextGw: data.nextGw,
       seasonLabel: data.seasonLabel,
+      live: data.live,
+      syncedAt: data.syncedAt,
     })
   } catch (e) {
+    if (e instanceof Error && e.message === NEED_SETUP) {
+      return NextResponse.json({ error: NEED_SETUP })
+    }
     console.error('overview error', e)
-    return NextResponse.json({ error: 'Erreur de chargement' }, { status: 500 })
+    return NextResponse.json({ error: 'Erreur de chargement des données réelles FPL' }, { status: 500 })
   }
 }

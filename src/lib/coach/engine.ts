@@ -1,443 +1,617 @@
-// ─── Moteur de scoring Fantasy ──────────────────────────────────────────────
-// Data Provider → Normalisation → DB → Analytics
+// ─── Moteur coach v2 — 100% données réelles (API officielle Fantasy Premier League) ───
+// Aucune donnée inventée : tout est calculé depuis bootstrap-static, fixtures, live,
+// entry (mon équipe réelle) et leagues-classic (ma vraie ligue privée).
+
 import { db } from '@/lib/db'
+import * as fpl from '@/lib/fpl/client'
 import type {
-  AlertItem, BuyCandidate, FixtureChip, LeagueData, MyTeamOverview, PlayerRow,
-  PlayerStats, Position, RivalAnalysis, SellCandidate, SquadEntry, TransferPlan, Verdict,
+  AlertItem, BuyCandidate, FixtureChip, LeagueData, LiveNow, MyTeamOverview, PlayerRow,
+  PlayerStatus, Position, RivalAnalysis, SellCandidate, SquadEntry, TeamFixtureRow,
+  TransferPlan, Verdict,
 } from './types'
 
-// ── Helpers ────────────────────────────────────────────────────────────────
-const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v))
+const POS_MAP: Record<number, Position> = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' }
+const num = (s: string | number | null | undefined) => parseFloat(String(s ?? '')) || 0
+const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const r1 = (v: number) => Math.round(v * 10) / 10
-const r2 = (v: number) => Math.round(v * 100) / 100
+const FIX_WINDOW = 5
 
-const ATTACK_FACTOR = [1, 1.16, 1.1, 1.0, 0.9, 0.82] // index = difficulté
-const GW_WEIGHTS = [0.32, 0.26, 0.2, 0.13, 0.09] // J+1 pèse le plus
-const FORM_WEIGHTS = [0.3, 0.25, 0.2, 0.15, 0.1] // dernier match pèse le plus
-
-export function attackDifficulty(oppDef: number, venue: 'H' | 'A'): number {
-  return clamp(Math.round(oppDef + (venue === 'A' ? 0.6 : -0.4)), 1, 5)
-}
-export function cleanSheetDifficulty(oppAtt: number, venue: 'H' | 'A'): number {
-  return clamp(Math.round(oppAtt + (venue === 'A' ? 0.6 : -0.4)), 1, 5)
-}
-export function fixturePoints(difficulty: number): number {
-  return ((5 - difficulty) / 4) * 100
-}
-
-const VERDICT_LABEL: Record<Verdict, string> = { GREEN: 'Bon investissement', YELLOW: 'À surveiller', RED: 'À éviter' }
-export const verdictLabel = (v: Verdict) => VERDICT_LABEL[v]
+export const NEED_SETUP = 'NEED_SETUP'
 export const verdictEmoji = (v: Verdict) => (v === 'GREEN' ? '🟢' : v === 'YELLOW' ? '🟡' : '🔴')
 
-// ── Chargement + calcul ────────────────────────────────────────────────────
-type Cache = { data: CoachData; ts: number } | null
-let cache: Cache = null
-const TTL = 30_000
+export interface CoachSettings { teamId: number | null; leagueId: number | null; cookie: string | null }
+
+export async function getSettings(): Promise<CoachSettings> {
+  try {
+    const s = await db.settings.findUnique({ where: { id: 'default' } })
+    return { teamId: s?.teamId ?? null, leagueId: s?.leagueId ?? null, cookie: s?.cookie ?? null }
+  } catch {
+    return { teamId: null, leagueId: null, cookie: null }
+  }
+}
+
+// ─── Contexte de saison (réel) ───────────────────────────────────────────────
+
+interface Ctx {
+  teams: Map<number, fpl.FplTeam>
+  elements: fpl.FplElement[]
+  gwsFinished: number[]
+  gwsPlayed: number
+  currentGw: number | null
+  focusGw: number
+  seasonLabel: string
+  pastOpp: Map<string, { opp: number; venue: 'H' | 'A' }> // `${gw}:${teamId}`
+  upcomingByTeam: Map<number, fpl.FplFixture[]>
+  fixtures: fpl.FplFixture[]
+}
+
+async function buildCtx(): Promise<Ctx> {
+  const boot = await fpl.getBootstrap()
+  const fixtures = await fpl.getFixtures()
+  const events = boot.events
+  const gwsFinished = events.filter((e) => e.finished).map((e) => e.id)
+  const current = events.find((e) => e.is_current && !e.finished)
+  const next = events.find((e) => e.is_next)
+  const focusGw = next?.id ?? current?.id ?? (gwsFinished.at(-1) ?? 0) + 1
+  const teams = new Map(boot.teams.map((t) => [t.id, t]))
+
+  const pastOpp = new Map<string, { opp: number; venue: 'H' | 'A' }>()
+  for (const f of fixtures) {
+    if (f.event == null || !f.finished) continue
+    pastOpp.set(`${f.event}:${f.team_h}`, { opp: f.team_a, venue: 'H' })
+    pastOpp.set(`${f.event}:${f.team_a}`, { opp: f.team_h, venue: 'A' })
+  }
+  const upcomingByTeam = new Map<number, fpl.FplFixture[]>()
+  for (const f of fixtures) {
+    if (f.event == null || f.event < focusGw) continue
+    for (const tid of [f.team_h, f.team_a]) {
+      const arr = upcomingByTeam.get(tid) ?? []
+      arr.push(f)
+      upcomingByTeam.set(tid, arr)
+    }
+  }
+  for (const arr of upcomingByTeam.values()) arr.sort((a, b) => (a.event ?? 0) - (b.event ?? 0))
+
+  const y0 = new Date(events[0]?.deadline_time ?? Date.now()).getFullYear()
+  const seasonLabel = `Premier League ${y0}/${String((y0 + 1) % 100).padStart(2, '0')}`
+
+  return {
+    teams, elements: boot.elements, gwsFinished, gwsPlayed: gwsFinished.length,
+    currentGw: current?.id ?? null, focusGw, seasonLabel, pastOpp, upcomingByTeam, fixtures,
+  }
+}
+
+// Live réel par journée → map playerId → stats
+async function liveMap(gw: number, isCurrent: boolean) {
+  const live = await fpl.getLive(gw, isCurrent)
+  return new Map(live.elements.map((e) => [e.id, e.stats]))
+}
+
+async function picksFor(teamId: number, gw: number): Promise<fpl.FplPicks> {
+  for (const g of [gw, gw - 1, gw - 2]) {
+    if (g < 1) break
+    try { return await fpl.getEntryPicks(teamId, g) } catch { /* journée pas encore définie */ }
+  }
+  throw new Error('PICKS_UNAVAILABLE')
+}
+
+// ─── Construction des PlayerRow (joueurs réels) ──────────────────────────────
+
+const STATUS_MAP: Record<string, PlayerStatus> = { a: 'FIT', d: 'DOUBTFUL', i: 'INJURED', s: 'SUSPENDED', u: 'INJURED', n: 'FIT' }
+
+function availability(el: fpl.FplElement): number {
+  const chanceNext = el.chance_of_playing_next_round
+  switch (el.status) {
+    case 'a': return 1
+    case 'd': return clamp((el.chance_of_playing_this_round ?? 75) / 100, 0.15, 0.9)
+    case 'i': case 's': case 'u': return (chanceNext ?? 0) >= 75 ? 0.55 : 0.05
+    default: return 0.8
+  }
+}
+
+interface RowsOpts { ownership?: Map<number, string[]>; myIds?: Set<number> }
+
+function buildRows(ctx: Ctx, opts: RowsOpts) {
+  const lastGws = ctx.gwsFinished.slice(-5)
+  const livePromises = lastGws.map((gw) => liveMap(gw, ctx.currentGw === gw))
+  return Promise.all(livePromises).then((liveByGw) => {
+    const rows: PlayerRow[] = []
+    for (const el of ctx.elements) {
+      if (el.removed || el.special) continue
+      const team = ctx.teams.get(el.team)
+      if (!team) continue
+      const position = POS_MAP[el.element_type]
+      const status = STATUS_MAP[el.status] ?? 'FIT'
+      const gwp = Math.max(1, ctx.gwsPlayed)
+      const minutesPct = clamp(Math.round((el.minutes / (gwp * 90)) * 100), 0, 100)
+      const expectedMinutes = clamp(el.minutes / (gwp * 90), 0, 1)
+      const formN = num(el.form)
+      const ppg = num(el.points_per_game)
+      const A = availability(el)
+
+      // 5 derniers matchs réels (live FPL : minutes, buts, passes, BPS)
+      const last5: Last5Match[] = []
+      let apps = 0
+      for (let i = 0; i < lastGws.length; i++) {
+        const gw = lastGws[i]
+        const st = liveByGw[i]?.get(el.id)
+        const opp = ctx.pastOpp.get(`${gw}:${el.team}`)
+        if (!st || !opp) continue
+        if (st.minutes === 0 && st.bps === 0) continue
+        if (st.minutes > 0) apps++
+        last5.push({
+          gw,
+          oppShort: ctx.teams.get(opp.opp)?.short_name ?? '?',
+          venue: opp.venue,
+          rating: r1(clamp(4 + st.bps / 10, 4, 10)),
+          minutes: st.minutes, goals: st.goals_scored, assists: st.assists,
+        })
+      }
+
+      // Calendrier réel à venir (5 journées, doubles journées gérées)
+      const fixtures: FixtureChip[] = []
+      const upc = ctx.upcomingByTeam.get(el.team) ?? []
+      for (const f of upc) {
+        if (fixtures.length >= FIX_WINDOW + 2) break
+        const home = f.team_h === el.team
+        const opp = ctx.teams.get(home ? f.team_a : f.team_h)
+        if (!opp || f.event == null) continue
+        fixtures.push({ gw: f.event, opp: opp.short_name, venue: home ? 'H' : 'A', difficulty: home ? f.team_h_difficulty : f.team_a_difficulty })
+      }
+      const diffs = fixtures.slice(0, FIX_WINDOW).map((f) => f.difficulty)
+      const avgDiff = diffs.length ? diffs.reduce((a, b) => a + b, 0) / diffs.length : 3
+      const fixtureScore = clamp(Math.round(((6 - avgDiff) / 5) * 100), 0, 100)
+
+      // Projection J+1 (explicable, calée sur ep_next officiel + forme + minutes + calendrier)
+      const epNext = num(el.ep_next)
+      const base = 0.45 * epNext + 0.35 * formN + 0.2 * ppg
+      const fx3 = (fixtures.slice(0, 3).map((f) => f.difficulty).reduce((a, b) => a + b, 0) / Math.max(1, fixtures.slice(0, 3).length)) || 3
+      const F = 1 + (3 - fx3) * 0.09
+      const M = clamp(expectedMinutes, 0.25, 1)
+      const projection = r1(base * M * F * A)
+
+      // Cumul 5 journées
+      let p5 = 0
+      for (const f of fixtures.slice(0, FIX_WINDOW)) {
+        p5 += base * M * (1 + (3 - f.difficulty) * 0.09) * A
+      }
+      const projection5 = r1(p5)
+
+      // Verdict 🟢🟡🔴 avec raisons réelles
+      const reasons: string[] = []
+      let red = false, green = false
+      if (A < 0.5) {
+        red = true
+        reasons.push(`Très incertain pour J${ctx.focusGw} — ${el.news || 'statut ' + el.status.toUpperCase()}`)
+      } else if (status === 'DOUBTFUL') {
+        reasons.push(`Incertitude physique : ${el.chance_of_playing_this_round ?? 75}% de jouer — ${el.news || 'suivi de l’effectif'}`)
+      }
+      if (projection >= 6.2) {
+        green = true
+        reasons.push(`Projection ${fmtN(projection)} pts pour J${ctx.focusGw} (forme ${fmtN(formN)}, ép_next officiel ${fmtN(epNext)})`)
+      }
+      if (formN >= 5 && fixtureScore >= 60) {
+        green = true
+        reasons.push(`Forme chaude (${fmtN(formN)} pts) et calendrier favorable (${fixtureScore}/100)`)
+      }
+      if (minutesPct < 40 && A > 0.5) {
+        red = true
+        reasons.push(`Temps de jeu limité : ${el.minutes} min sur ${ctx.gwsPlayed} journées (${minutesPct}%)`)
+      }
+      if (formN < 2.8 && projection < 3.5 && A > 0.5) {
+        red = true
+        reasons.push(`Forme critique (${fmtN(formN)}) et faible projection (${fmtN(projection)})`)
+      }
+      if (reasons.length === 0) {
+        reasons.push(`Rendement moyen : forme ${fmtN(formN)}, proj. ${fmtN(projection)}, calendrier ${fixtureScore}/100`)
+      }
+      const verdict: Verdict = red ? 'RED' : green ? 'GREEN' : 'YELLOW'
+
+      const startShare = el.starts / gwp
+      const rotationRisk = ctx.gwsPlayed === 0 ? 'MEDIUM' : startShare < 0.45 ? 'HIGH' : startShare < 0.75 ? 'MEDIUM' : 'LOW'
+      let trend: 'UP' | 'DOWN' | 'STABLE' = 'STABLE'
+      if (el.cost_change_event > 0 || formN > ppg + 0.5) trend = 'UP'
+      else if (el.cost_change_event < 0 || formN < ppg - 0.5) trend = 'DOWN'
+
+      const ownedRivals = opts.ownership?.get(el.id) ?? []
+      const injuryNote = el.news && status !== 'FIT' ? el.news : status === 'DOUBTFUL' ? el.news || 'Incertitude physique' : null
+
+      rows.push({
+        id: String(el.id), fplId: el.id, name: el.web_name,
+        teamId: String(el.team), teamShort: team.short_name, teamName: team.name,
+        position, price: el.now_cost / 10,
+        ownership: num(el.selected_by_percent),
+        status, injuryNote, rotationRisk, trend,
+        rating: r1(ppg), form: r1(formN),
+        minutesPct, expectedMinutes, epNext,
+        stats: {
+          apps: Math.max(apps, el.starts), minutes: el.minutes, starts: el.starts,
+          goals: el.goals_scored, assists: el.assists,
+          xg: num(el.expected_goals), xa: num(el.expected_assists), xgi: num(el.expected_goal_involvements),
+          cleanSheets: el.clean_sheets, saves: el.saves, bonus: el.bonus, bps: el.bps,
+          tackles: el.tackles, cbi: el.clearances_blocks_interceptions, recoveries: el.recoveries,
+          yellow: el.yellow_cards, red: el.red_cards,
+        },
+        last5, fixtures, fixtureScore, projection, projection5, verdict, reasons,
+        ownedByMe: opts.myIds?.has(el.id) ?? false, ownedByRivals: ownedRivals,
+      })
+    }
+    return rows
+  })
+}
+type Last5Match = PlayerRow['last5'][number]
+const fmtN = (v: number) => v.toFixed(1).replace('.', ',')
+
+// ─── Métriques de squad (moi + rivaux) ───────────────────────────────────────
+
+interface SquadMetrics {
+  starters: SquadEntry[]
+  bench: SquadEntry[]
+  projected: number
+  squadScore: number
+  captainName: string | null
+  overlapIds: Set<number>
+}
+
+function squadMetrics(rowsById: Map<number, PlayerRow>, picks: fpl.FplPicks): SquadMetrics {
+  const entries: SquadEntry[] = picks.picks.map((p) => ({
+    slot: p.position,
+    isStarter: p.position <= 11,
+    isCaptain: p.is_captain,
+    player: rowsById.get(p.element) ?? fallbackRow(p.element),
+  }))
+  const starters = entries.filter((e) => e.isStarter).sort((a, b) => a.slot - b.slot)
+  const bench = entries.filter((e) => !e.isStarter).sort((a, b) => a.slot - b.slot)
+  const proj = (e: SquadEntry) => (e.player.status === 'FIT' || e.player.status === 'DOUBTFUL' ? e.player.projection : 0)
+  let projected = starters.reduce((acc, e) => acc + proj(e), 0)
+  const cap = starters.find((e) => e.isCaptain)
+  if (cap) { projected += proj(cap); }
+  const captainName = cap?.player.name ?? null
+  const avg = starters.length ? starters.reduce((acc, e) => acc + proj(e), 0) / starters.length : 0
+  const squadScore = clamp(Math.round(((avg - 2.5) / 5) * 100), 1, 99)
+  const overlapIds = new Set(entries.map((e) => e.player.fplId))
+  return { starters, bench, projected: Math.round(projected * 10) / 10, squadScore, captainName, overlapIds }
+}
+
+const fallbackRow = (fplId: number): PlayerRow => ({
+  id: String(fplId), fplId, name: `Joueur #${fplId}`, teamId: '0', teamShort: '?', teamName: '?',
+  position: 'MID', price: 0, ownership: 0, status: 'FIT', injuryNote: null, rotationRisk: 'MEDIUM',
+  trend: 'STABLE', rating: 0, form: 0, minutesPct: 0, expectedMinutes: 0, epNext: 0,
+  stats: { apps: 0, minutes: 0, starts: 0, goals: 0, assists: 0, xg: 0, xa: 0, xgi: 0, cleanSheets: 0, saves: 0, bonus: 0, bps: 0, tackles: 0, cbi: 0, recoveries: 0, yellow: 0, red: 0 },
+  last5: [], fixtures: [], fixtureScore: 50, projection: 0, projection5: 0, verdict: 'YELLOW',
+  reasons: [], ownedByMe: false, ownedByRivals: [],
+})
+
+// ─── Mon équipe réelle ───────────────────────────────────────────────────────
+
+function estimateFreeTransfers(history: fpl.FplEntryHistory): number {
+  let ft = 1
+  const evs = history.current.filter((e) => e.event >= 2).sort((a, b) => a.event - b.event)
+  for (const e of evs) ft = Math.min(2, Math.max(0, ft - e.event_transfers) + 1)
+  return ft
+}
+
+async function buildMyTeam(ctx: Ctx, settings: CoachSettings, rowsById: Map<number, PlayerRow>, myPicks: fpl.FplPicks, entry: fpl.FplEntry, history: fpl.FplEntryHistory): Promise<MyTeamOverview> {
+  const m = squadMetrics(rowsById, myPicks)
+  const eh = myPicks.entry_history
+  const lastHist = history.current.at(-1)
+  const bank = (eh?.bank ?? lastHist?.bank ?? 0) / 10
+  const teamValue = (eh?.value ?? lastHist?.value ?? 1000) / 10
+
+  // Transferts restants : exact si cookie valide, sinon estimation depuis l'historique réel
+  let transfersLeft = estimateFreeTransfers(history)
+  let transfersExact = false
+  if (settings.cookie) {
+    try {
+      const mt = await fpl.getMyTeam(settings.teamId!, settings.cookie)
+      if (mt?.transfers) {
+        transfersLeft = Math.max(0, (mt.transfers.limit ?? 1) - (mt.transfers.made ?? 0))
+        transfersExact = true
+      }
+    } catch { /* cookie expiré → estimation */ }
+  }
+
+  // Capitaine suggéré = meilleure projection du XI réel
+  const best = [...m.starters].filter((e) => e.player.projection > 0).sort((a, b) => b.player.projection - a.player.projection)[0]
+  const captainSuggestion = best && best.player.name !== m.captainName ? { name: best.player.name, projection: best.player.projection } : null
+
+  const weakestStarters = [...m.starters]
+    .filter((e) => e.player.projection < 5.2 || e.player.status === 'INJURED' || e.player.status === 'SUSPENDED')
+    .sort((a, b) => a.player.projection - b.player.projection)
+    .slice(0, 3)
+    .map((e) => ({ name: e.player.name, projection: e.player.projection, verdict: e.player.verdict, reason: e.player.reasons[0] ?? 'Projection faible' }))
+
+  return {
+    teamName: entry.name, ownerName: `${entry.player_first_name} ${entry.player_last_name}`.trim(),
+    bank: r1(bank), transfersLeft, transfersExact, totalPoints: entry.summary_overall_points ?? lastHist?.total_points ?? 0,
+    rank: 0, leagueSize: 5, squadScore: m.squadScore, teamValue: r1(teamValue),
+    starters: m.starters, bench: m.bench, captainSuggestion,
+    projectedGwPoints: Math.round(m.projected), weakestStarters,
+  }
+}
+
+// ─── Plan de transferts ──────────────────────────────────────────────────────
+
+function buildTransfers(ctx: Ctx, rows: PlayerRow[], me: MyTeamOverview, myPicks: fpl.FplPicks): TransferPlan {
+  const myIds = new Set(myPicks.picks.map((p) => p.element))
+  const owned = rows.filter((r) => myIds.has(r.fplId))
+  const pool = rows.filter((r) => !myIds.has(r.fplId) && r.price > 0)
+
+  const flagReason = (p: PlayerRow): string | null => {
+    if (p.status === 'INJURED' || p.status === 'SUSPENDED') return `${p.injuryNote ?? 'Indisponible'} — absent pour J${ctx.focusGw}`
+    if (p.status === 'DOUBTFUL') return `Incertitude physique (${p.injuryNote ?? 'suivi'})`
+    if (p.minutesPct < 45) return `Temps de jeu insuffisant (${p.minutesPct}% des minutes)`
+    if (p.form < 3.2) return `Forme faible (${fmtN(p.form)} pts de moyenne sur 5)`
+    if (p.fixtureScore < 40) return `Calendrier des 5 prochaines journées difficile (${p.fixtureScore}/100)`
+    if (p.projection < 4.2) return `Projection faible pour J${ctx.focusGw} (${fmtN(p.projection)})`
+    return null
+  }
+
+  const sell: SellCandidate[] = owned
+    .map((p) => ({ p, r: flagReason(p) }))
+    .sort((a, b) => (a.r ? 0 : 1) - (b.r ? 0 : 1) || a.p.projection - b.p.projection)
+    .slice(0, 3)
+    .filter((x) => x.r)
+    .map(({ p, r }) => ({ player: p, reason: r! }))
+
+  const buy: BuyCandidate[] = []
+  const seen = new Set<number>()
+  for (const s of sell) {
+    const budget = s.player.price + me.bank
+    const cands = pool
+      .filter((p) => p.position === s.player.position && p.price <= budget + 0.1 && !seen.has(p.fplId))
+      .sort((a, b) => b.projection - a.projection)
+      .slice(0, 2)
+    for (const c of cands) {
+      if (c.projection <= s.player.projection + 0.1) continue
+      seen.add(c.fplId)
+      buy.push({
+        player: c, netGain: r1(c.projection - s.player.projection), comparedTo: s.player.name,
+        affordable: true, differential: c.ownedByRivals.length === 0,
+        justification: `Forme ${fmtN(c.form)} • proj. J${ctx.focusGw} ${fmtN(c.projection)} • calendrier ${c.fixtureScore}/100${c.ownedByRivals.length === 0 ? ' • 0 rival ne le possède' : ''}`,
+      })
+    }
+  }
+  // Cibles libres si banque déjà suffisante (pas de vente nécessaire)
+  const freeBudget = me.bank + Math.min(...(sell.length ? sell.map((s) => s.player.price) : [4.5]))
+  if (buy.length < 6) {
+    const free = pool
+      .filter((p) => p.price <= freeBudget && !seen.has(p.fplId) && p.projection >= 5.5)
+      .sort((a, b) => b.projection - a.projection)
+      .slice(0, 6 - buy.length)
+    for (const c of free) {
+      seen.add(c.fplId)
+      buy.push({
+        player: c, netGain: null, comparedTo: null, affordable: true, differential: c.ownedByRivals.length === 0,
+        justification: `Amélioration directe : proj. ${fmtN(c.projection)} (forme ${fmtN(c.form)}, calendrier ${c.fixtureScore}/100)${c.ownedByRivals.length === 0 ? ' • 0 rival ne le possède' : ''}`,
+      })
+    }
+  }
+  return { bank: me.bank, transfersLeft: me.transfersLeft, sell, buy }
+}
+
+// ─── Alertes ─────────────────────────────────────────────────────────────────
+
+function buildAlerts(ctx: Ctx, rows: PlayerRow[], me: MyTeamOverview, rivals: RivalAnalysis[]): AlertItem[] {
+  const alerts: AlertItem[] = []
+  const myIds = new Set([...me.starters, ...me.bench].map((e) => e.player.fplId))
+
+  for (const p of rows.filter((r) => myIds.has(r.fplId))) {
+    if (p.status === 'INJURED' || p.status === 'SUSPENDED') {
+      alerts.push({ id: `RISK:${p.fplId}`, type: 'SQUAD_RISK', severity: 'danger', title: `${p.name} indisponible`, detail: `${p.injuryNote ?? 'Statut ' + p.status} — prévois un remplacement pour J${ctx.focusGw}.`, playerId: p.id })
+    } else if (p.status === 'DOUBTFUL') {
+      alerts.push({ id: `RISK:${p.fplId}`, type: 'SQUAD_RISK', severity: 'warning', title: `${p.name} incertain`, detail: p.injuryNote ?? 'Incertitude physique — surveille les news avant le deadline.', playerId: p.id })
+    } else if (p.rotationRisk === 'HIGH' && p.minutesPct < 50) {
+      alerts.push({ id: `ROT:${p.fplId}`, type: 'SQUAD_RISK', severity: 'warning', title: `Rotation : ${p.name}`, detail: `Seulement ${p.minutesPct}% des minutes cette saison — risque de banc élevé.`, playerId: p.id })
+    } else if (p.price >= 8 && p.form < 3.5) {
+      alerts.push({ id: `UNDER:${p.fplId}`, type: 'UNDERPERF', severity: 'warning', title: `${p.name} sous-performe`, detail: `${fmtN(p.price)}M pour une forme de ${fmtN(p.form)} — rentabilité insuffisante.`, playerId: p.id })
+    }
+  }
+
+  const opportunities = rows
+    .filter((p) => !p.ownedByMe && p.form >= 5.5 && p.price <= 7.5 && p.fixtureScore >= 60 && p.ownedByRivals.length <= 1 && p.projection >= 5)
+    .sort((a, b) => b.projection - a.projection).slice(0, 3)
+  for (const p of opportunities) {
+    alerts.push({ id: `OPP:${p.fplId}`, type: 'OPPORTUNITY', severity: 'success', title: `Opportunité : ${p.name}`, detail: `${p.teamShort} • ${fmtN(p.price)}M • forme ${fmtN(p.form)} • calendrier ${p.fixtureScore}/100 • possédé par ${p.ownedByRivals.length} rival(s) dans ta ligue.`, playerId: p.id })
+  }
+
+  const threats = rivals
+    .flatMap((r) => r.threats.map((t) => ({ rival: r.ownerName, t })))
+    .filter((x) => x.t.projection >= 6)
+    .sort((a, b) => b.t.projection - a.t.projection).slice(0, 2)
+  for (const x of threats) {
+    alerts.push({ id: `THREAT:${x.rival}:${x.t.name}`, type: 'RIVAL_THREAT', severity: 'info', title: `${x.rival} mise sur ${x.t.name}`, detail: `Projection ${fmtN(x.t.projection)} pts pour J${ctx.focusGw} — ce joueur n'est pas dans ton équipe.`, playerId: undefined })
+  }
+
+  if (me.captainSuggestion) {
+    alerts.push({ id: 'CAPTAIN', type: 'CAPTAIN', severity: 'info', title: `Capitaine optimal : ${me.captainSuggestion.name}`, detail: `Projection ${fmtN(me.captainSuggestion.projection)} pts — supérieure au brassard actuel.`, playerId: me.starters.find((s) => s.player.name === me.captainSuggestion!.name)?.player.id })
+  }
+  const order = { danger: 0, warning: 1, info: 2, success: 3 } as const
+  return alerts.sort((a, b) => order[a.severity] - order[b.severity]).slice(0, 12)
+}
+
+// ─── Ligue réelle ────────────────────────────────────────────────────────────
+
+export async function buildLeagueData(ctx: Ctx, settings: CoachSettings, rowsById: Map<number, PlayerRow>, rows: PlayerRow[], myPicks: fpl.FplPicks, myMetrics: SquadMetrics, myTotal: number): Promise<LeagueData> {
+  if (!settings.leagueId) throw new Error(NEED_SETUP)
+  const standing = await fpl.getLeagueStandings(settings.leagueId)
+  const results = standing.standings.results
+  const myEntryId = settings.teamId!
+
+  const ownership = new Map<number, string[]>() // playerId → rivaux
+  const rivalsData: { name: string; owner: string; entryId: number; total: number; picks: fpl.FplPicks; metrics: SquadMetrics }[] = []
+
+  for (const res of results) {
+    if (res.entry === myEntryId) continue
+    try {
+      const picks = await picksFor(res.entry, ctx.focusGw)
+      const metrics = squadMetrics(rowsById, picks)
+      rivalsData.push({ name: res.entry_name, owner: res.player_name, entryId: res.entry, total: res.total, picks, metrics })
+      for (const p of picks.picks) {
+        const arr = ownership.get(p.element) ?? []
+        arr.push(res.entry_name)
+        ownership.set(p.element, arr)
+      }
+    } catch { /* rival introuvable → ignoré */ }
+  }
+
+  const standings = results.map((res, i) => {
+    const isMine = res.entry === myEntryId
+    let sq = 0, proj = 0
+    if (isMine) { sq = myMetrics.squadScore; proj = Math.round(myMetrics.projected) }
+    else {
+      const r = rivalsData.find((x) => x.entryId === res.entry)
+      sq = r?.metrics.squadScore ?? 0; proj = Math.round(r?.metrics.projected ?? 0)
+    }
+    return { rank: res.rank_sort ?? i + 1, teamName: res.entry_name, ownerName: res.player_name, isMine, totalPoints: res.total, squadScore: sq, projectedGwPoints: proj }
+  })
+
+  const rivals: RivalAnalysis[] = rivalsData.map((r) => {
+    const overlap = [...r.metrics.overlapIds].filter((id) => myMetrics.overlapIds.has(id)).length
+    const diff = r.metrics.projected - myMetrics.projected
+    const threatLevel: RivalAnalysis['threatLevel'] = diff >= 4 ? 'HIGH' : diff >= -1 ? 'MEDIUM' : 'LOW'
+    const threats = r.metrics.starters
+      .filter((e) => !myMetrics.overlapIds.has(e.player.fplId) && e.player.projection >= 5)
+      .sort((a, b) => b.player.projection - a.player.projection).slice(0, 3)
+      .map((e) => ({ name: e.player.name, position: e.player.position, teamShort: e.player.teamShort, projection: e.player.projection, price: e.player.price }))
+    const top = threats[0]
+    const advice = threatLevel === 'HIGH'
+      ? `Proj. J${ctx.focusGw} supérieure de ${fmtN(r.metrics.projected - myMetrics.projected)} pts${top ? ` — il mise sur ${top.name} (${fmtN(top.projection)}) : contre ou différentiel.` : '.'}`
+      : threatLevel === 'MEDIUM'
+        ? 'Profil proche du tien — le capitaine et les différentiels feront la différence.'
+        : 'Projeté derrière toi cette journée — joue ton jeu, pas le sien.'
+    return {
+      teamName: r.name, ownerName: r.owner, totalPoints: r.total, squadScore: r.metrics.squadScore,
+      projectedGwPoints: Math.round(r.metrics.projected), threatLevel, overlap, threats, advice,
+      squad: [...r.metrics.starters, ...r.metrics.bench].map((e) => ({ name: e.player.name, position: e.player.position, teamShort: e.player.teamShort, isCaptain: e.isCaptain, projection: e.player.projection, verdict: e.player.verdict })),
+    }
+  }).sort((a, b) => b.projectedGwPoints - a.projectedGwPoints)
+
+  const differentials = rows
+    .filter((p) => !p.ownedByMe && (ownership.get(p.fplId)?.length ?? 0) === 0 && p.projection >= 5 && p.price <= 9.5 && p.status !== 'INJURED' && p.status !== 'SUSPENDED')
+    .sort((a, b) => b.projection - a.projection).slice(0, 8)
+
+  return { leagueName: standing.league.name, myScore: myTotal, standings, rivals, differentials }
+}
+
+// ─── Orchestration ───────────────────────────────────────────────────────────
 
 export interface CoachData {
-  players: PlayerRow[]
-  playerById: Map<string, PlayerRow>
-  teamScores: Map<string, number>
   me: MyTeamOverview
-  rivalsRaw: { fantasyTeamId: string; teamName: string; ownerName: string; totalPoints: number; bank: number; transfersLeft: number; starters: PlayerRow[]; bench: PlayerRow[]; captain: string; squadScore: number; projectedGwPoints: number }[]
   alerts: AlertItem[]
   transfers: TransferPlan
-  differentials: PlayerRow[]
   nextGw: number
   seasonLabel: string
+  live: LiveNow | null
+  syncedAt: string
+  rows: PlayerRow[]
+  rowsById: Map<number, PlayerRow>
+  league: LeagueData
 }
 
 export async function getCoachData(): Promise<CoachData> {
-  if (cache && Date.now() - cache.ts < TTL) return cache.data
-  const data = await computeAll()
-  cache = { data, ts: Date.now() }
-  return data
-}
+  const settings = await getSettings()
+  if (!settings.teamId || !settings.leagueId) throw new Error(NEED_SETUP)
+  const ctx = await buildCtx()
 
-async function computeAll(): Promise<CoachData> {
-  const [teams, players, fixtures, fantasyTeams, slots] = await Promise.all([
-    db.team.findMany(),
-    db.player.findMany(),
-    db.fixture.findMany({ orderBy: { gw: 'asc' } }),
-    db.fantasyTeam.findMany(),
-    db.squadSlot.findMany({ orderBy: { slot: 'asc' } }),
-  ])
+  const [entry, history] = await Promise.all([fpl.getEntry(settings.teamId), fpl.getEntryHistory(settings.teamId)])
+  const myPicks = await picksFor(settings.teamId, ctx.focusGw)
 
-  const teamById = new Map(teams.map((t) => [t.id, t]))
-  const currentGw = Math.max(...fixtures.map((f) => f.gw <= 8 ? f.gw : 0))
-  const nextGw = currentGw + 1
+  const rows = await buildRows(ctx, { myIds: new Set(myPicks.picks.map((p) => p.element)) })
+  const rowsById = new Map(rows.map((r) => [r.fplId, r]))
+  const myMetrics = squadMetrics(rowsById, myPicks)
 
-  // ── Calendrier par équipe (5 prochaines journées) ──
-  const teamFixtures = new Map<string, { gw: number; oppShort: string; venue: 'H' | 'A'; oppDef: number; oppAtt: number }[]>()
-  for (const f of fixtures) {
-    if (f.gw < nextGw || f.gw >= nextGw + 5) continue
-    const h = teamById.get(f.homeTeamId)!, a = teamById.get(f.awayTeamId)!
-    ;(teamFixtures.get(f.homeTeamId) ?? teamFixtures.set(f.homeTeamId, []).get(f.homeTeamId)!).push({ gw: f.gw, oppShort: a.shortName, venue: 'H', oppDef: a.def, oppAtt: a.att })
-    ;(teamFixtures.get(f.awayTeamId) ?? teamFixtures.set(f.awayTeamId, []).get(f.awayTeamId)!).push({ gw: f.gw, oppShort: h.shortName, venue: 'A', oppDef: h.def, oppAtt: h.att })
+  // Ligue réelle : rivaux + possession dans la ligue → enrichit ownedByRivals
+  const standing = await fpl.getLeagueStandings(settings.leagueId)
+  const ownership = new Map<number, string[]>()
+  const rivalPicksList: { entryId: number; name: string; picks: fpl.FplPicks }[] = []
+  for (const res of standing.standings.results) {
+    if (res.entry === settings.teamId) continue
+    try {
+      const picks = await picksFor(res.entry, ctx.focusGw)
+      rivalPicksList.push({ entryId: res.entry, name: res.entry_name, picks })
+      for (const p of picks.picks) ownership.set(p.element, [...(ownership.get(p.element) ?? []), res.entry_name])
+    } catch { /* ignoré */ }
+  }
+  for (const r of rows) r.ownedByRivals = ownership.get(r.fplId) ?? []
+
+  // Points LIVE réels de la journée en cours (multipliant capitaine inclus)
+  let live: LiveNow | null = null
+  if (ctx.currentGw) {
+    try {
+      const [curPicks, curLive] = await Promise.all([fpl.getEntryPicks(settings.teamId, ctx.currentGw), fpl.getLive(ctx.currentGw, true)])
+      const statsById = new Map(curLive.elements.map((e) => [e.id, e.stats]))
+      let points = 0
+      let remaining = 0
+      for (const p of curPicks.picks.filter((x) => x.position <= 11)) {
+        const st = statsById.get(p.element)
+        const row = rowsById.get(p.element)
+        if (st) points += st.total_points * p.multiplier
+        if (row) {
+          const tid = Number(row.teamId)
+          const fx = ctx.fixtures.find((f) => f.event === ctx.currentGw && !f.started && (f.team_h === tid || f.team_a === tid))
+          if (fx) remaining++
+        }
+      }
+      live = { gw: ctx.currentGw, points, remaining }
+    } catch { /* pas de live */ }
   }
 
-  const teamScores = new Map<string, number>()
-  for (const t of teams) {
-    const fx = teamFixtures.get(t.id) ?? []
-    let score = 0
-    fx.forEach((f, i) => { score += GW_WEIGHTS[i] * fixturePoints(attackDifficulty(f.oppDef, f.venue)) })
-    teamScores.set(t.id, r1(score))
-  }
+  const me = await buildMyTeam(ctx, settings, rowsById, myPicks, entry, history)
+  me.rank = standing.standings.results.findIndex((r) => r.entry === settings.teamId) + 1 || 0
+  me.leagueSize = standing.standings.results.length || me.leagueSize
 
-  // ── Possession par les équipes fantasy ──
-  const slotsByTeam = new Map<string, typeof slots>()
-  for (const s of slots) { (slotsByTeam.get(s.fantasyTeamId) ?? slotsByTeam.set(s.fantasyTeamId, []).get(s.fantasyTeamId)!).push(s) }
-  const ownedByMeIds = new Set<string>()
-  const ownedByRivals = new Map<string, string[]>() // playerId → [ownerName]
-  for (const ft of fantasyTeams) {
-    const ss = slotsByTeam.get(ft.id) ?? []
-    if (ft.isMine) ss.forEach((s) => ownedByMeIds.add(s.playerId))
-    else ss.forEach((s) => { (ownedByRivals.get(s.playerId) ?? ownedByRivals.set(s.playerId, []).get(s.playerId)!).push(ft.ownerName) })
-  }
-
-  // ── Construire les PlayerRow ──
-  const rows = new Map<string, PlayerRow>()
-  for (const p of players) {
-    const team = teamById.get(p.teamId)!
-    const stats = JSON.parse(p.statsJson) as PlayerStats
-    const last5 = JSON.parse(p.last5Json)
-    const chips: FixtureChip[] = (teamFixtures.get(p.teamId) ?? []).map((f) => ({
-      gw: f.gw, opp: f.oppShort, venue: f.venue,
-      difficulty: p.position === 'GK' ? cleanSheetDifficulty(f.oppAtt, f.venue) : attackDifficulty(f.oppDef, f.venue),
-    }))
-
-    const form = last5.length ? r2(last5.reduce((acc: number, m: { rating: number }, i: number) => acc + m.rating * FORM_WEIGHTS[i], 0)) : p.rating
-    const minutesPct = stats.apps > 0 ? clamp(stats.minutes / (stats.apps * 90), 0, 1) : 0
-
-    let expMin = stats.apps > 0 ? clamp(stats.starts / stats.apps, 0, 1) : 0.5
-    if (p.rotationRisk === 'HIGH') expMin *= 0.75
-    else if (p.rotationRisk === 'MEDIUM') expMin *= 0.9
-    if (p.status === 'DOUBTFUL') expMin *= 0.55
-    if (p.status === 'INJURED' || p.status === 'SUSPENDED') expMin = 0
-    expMin = clamp(expMin, 0.05, 0.95)
-
-    const base = p.rating * 0.5 + form * 0.5
-    const minutesFactor = 0.45 + 0.55 * expMin
-    const trendFactor = p.trend === 'UP' ? 1.05 : p.trend === 'DOWN' ? 0.94 : 1
-    // Pondération par la production réelle : évite qu'un joueur moyen sur une série facile
-    // projette comme une star. La production (xG+xA/app, ou clean sheets) module la note.
-    // La note Sofascore récompense le travail défensif/le volume ; le fantasy récompense
-    // les buts/passes/clean sheets → production et poste corrigent l'échelle.
-    let prodFactor = 1
-    let posDiscount = 1
-    if (p.position === 'MID' || p.position === 'FWD') {
-      const prodPerApp = stats.apps > 0 ? (stats.xg + stats.xa) / stats.apps : 0
-      prodFactor = clamp(0.7 + prodPerApp * 0.3, 0.7, 1.12)
-    } else if (p.position === 'DEF') {
-      const csRate = stats.apps > 0 ? stats.cleanSheets / stats.apps : 0
-      prodFactor = clamp(0.88 + csRate * 0.2, 0.88, 1.08)
-      posDiscount = 0.93
-    } else if (p.position === 'GK') {
-      posDiscount = 0.88
-    }
-    const fixtureDamp = clamp(0.55 + (p.quality ?? 70) / 220, 0.6, 1) // les stars profitent pleinement d'un calendrier facile
-
-    let projection = 0
-    let projection5 = 0
-    if (p.status === 'INJURED' || p.status === 'SUSPENDED') {
-      projection = 0
-      projection5 = 0
-    } else {
-      const nextD = chips[0]?.difficulty ?? 3
-      const factor = ATTACK_FACTOR[nextD]
-      const softFactor = p.position === 'GK' ? 1 + (factor - 1) * 0.5 : 1 + (factor - 1) * fixtureDamp
-      projection = clamp(base * minutesFactor * softFactor * trendFactor * prodFactor * posDiscount, 0, 9.5)
-      projection5 = chips.length
-        ? chips.reduce((acc, c) => {
-            const f = ATTACK_FACTOR[c.difficulty]
-            const sf = p.position === 'GK' ? 1 + (f - 1) * 0.5 : 1 + (f - 1) * fixtureDamp
-            return acc + base * minutesFactor * sf * trendFactor * prodFactor * posDiscount
-          }, 0) / chips.length
-        : projection
-      projection = r2(projection)
-      projection5 = r2(projection5)
-    }
-
-    const row: PlayerRow = {
-      id: p.id, name: p.name, teamId: p.teamId, teamShort: team.shortName, teamName: team.name,
-      position: p.position as Position, price: p.price, ownership: p.ownership,
-      status: p.status as PlayerRow['status'], injuryNote: p.injuryNote,
-      rotationRisk: p.rotationRisk as PlayerRow['rotationRisk'], trend: p.trend as PlayerRow['trend'],
-      rating: p.rating, form, minutesPct: Math.round(minutesPct * 100), expectedMinutes: Math.round(expMin * 100) / 100,
-      stats, last5, fixtures: chips,
-      fixtureScore: teamScores.get(p.teamId) ?? 50,
-      projection, projection5,
-      verdict: 'YELLOW', reasons: [],
-      ownedByMe: ownedByMeIds.has(p.id),
-      ownedByRivals: ownedByRivals.get(p.id) ?? [],
-    }
-    computeVerdict(row)
-    rows.set(p.id, row)
-  }
-
-  // ── Mon équipe ──
-  const meFt = fantasyTeams.find((f) => f.isMine)!
-  const mySlots = slotsByTeam.get(meFt.id) ?? []
-  const starters: SquadEntry[] = mySlots.filter((s) => s.isStarter).map((s) => ({ slot: s.slot, isStarter: true, isCaptain: s.isCaptain, player: rows.get(s.playerId)! }))
-  const bench: SquadEntry[] = mySlots.filter((s) => !s.isStarter).map((s) => ({ slot: s.slot, isStarter: false, isCaptain: false, player: rows.get(s.playerId)! }))
-  const xiProj = starters.reduce((a, s) => a + s.player.projection, 0)
-  const avgXI = xiProj / Math.max(1, starters.length)
-  const benchProj = bench.reduce((a, s) => a + s.player.projection, 0) / Math.max(1, bench.length)
-  const squadScore = Math.round(clamp(((avgXI - 3.2) / 5.2) * 100 + benchProj * 1.5, 0, 100))
-  const projectedGwPoints = Math.round(xiProj * 1.9)
-
-  const bestCaptain = [...starters].sort((a, b) => b.player.projection - a.player.projection)[0]
-  const myCaptain = starters.find((s) => s.isCaptain)
-  const captainSuggestion = bestCaptain && myCaptain && bestCaptain.player.id !== myCaptain.player.id
-    ? { name: bestCaptain.player.name, projection: bestCaptain.player.projection }
-    : null
-
-  const weakestStarters = [...starters]
-    .sort((a, b) => a.player.projection - b.player.projection)
-    .slice(0, 3)
-    .map((s) => ({ name: s.player.name, projection: s.player.projection, verdict: s.player.verdict, reason: s.player.reasons[0] ?? '' }))
-
-  const me: MyTeamOverview = {
-    teamName: meFt.teamName, ownerName: meFt.ownerName, bank: meFt.bank, transfersLeft: meFt.transfersLeft,
-    totalPoints: meFt.totalPoints, rank: 0, squadScore, teamValue: r1([...mySlots].reduce((a, s) => a + (rows.get(s.playerId)?.price ?? 0), 0)),
-    starters, bench, captainSuggestion, projectedGwPoints, weakestStarters,
-  }
-
-  // ── Rivaux (brut) ──
-  const rivalsRaw = fantasyTeams.filter((f) => !f.isMine).map((ft) => {
-    const ss = slotsByTeam.get(ft.id) ?? []
-    const st = ss.filter((s) => s.isStarter).map((s) => ({ slot: s.slot, isStarter: true, isCaptain: s.isCaptain, player: rows.get(s.playerId)! }))
-    const bn = ss.filter((s) => !s.isStarter).map((s) => ({ slot: s.slot, isStarter: false, isCaptain: false, player: rows.get(s.playerId)! }))
-    const xi = st.reduce((a, s) => a + s.player.projection, 0)
-    const score = Math.round(clamp(((xi / Math.max(1, st.length) - 3.2) / 5.2) * 100 + (bn.reduce((a, s) => a + s.player.projection, 0) / Math.max(1, bn.length)) * 1.5, 0, 100))
-    const captainName = st.find((s) => s.isCaptain)?.player.name ?? '—'
-    return {
-      fantasyTeamId: ft.id, teamName: ft.teamName, ownerName: ft.ownerName, totalPoints: ft.totalPoints,
-      bank: ft.bank, transfersLeft: ft.transfersLeft,
-      starters: st.map((s) => s.player), bench: bn.map((s) => s.player), captain: captainName,
-      squadScore: score, projectedGwPoints: Math.round(xi * 1.9),
-    }
-  })
-
-  const standings = [
-    { teamName: me.teamName, ownerName: me.ownerName, isMine: true, totalPoints: me.totalPoints, squadScore: me.squadScore, projectedGwPoints: me.projectedGwPoints },
-    ...rivalsRaw.map((r) => ({ teamName: r.teamName, ownerName: r.ownerName, isMine: false, totalPoints: r.totalPoints, squadScore: r.squadScore, projectedGwPoints: r.projectedGwPoints })),
-  ].sort((a, b) => b.totalPoints - a.totalPoints)
-  me.rank = standings.findIndex((s) => s.isMine) + 1
-
-  // ── Alertes ──
-  const alerts = computeAlerts(rows, starters, rivalsRaw, captainSuggestion)
-
-  // ── Transferts ──
-  const transfers = computeTransfers(meFt.bank, meFt.transfersLeft, starters, bench, rows)
-
-  // ── Différentiels ──
-  const differentials = [...rows.values()]
-    .filter((p) => !p.ownedByMe && p.ownedByRivals.length === 0 && p.status === 'FIT' && p.projection >= 6.0 && p.ownership <= 18)
-    .sort((a, b) => b.projection - a.projection)
-    .slice(0, 8)
+  const league = await buildLeagueData(ctx, settings, rowsById, rows, myPicks, myMetrics, me.totalPoints)
+  const transfers = buildTransfers(ctx, rows, me, myPicks)
+  const alerts = buildAlerts(ctx, rows, me, league.rivals)
 
   return {
-    players: [...rows.values()].sort((a, b) => b.projection - a.projection),
-    playerById: rows,
-    teamScores, me, rivalsRaw, alerts, transfers, differentials,
-    nextGw,
-    seasonLabel: 'Premier League 2026/27',
+    me, alerts, transfers, nextGw: ctx.focusGw, seasonLabel: ctx.seasonLabel, live,
+    syncedAt: new Date().toISOString(), rows, rowsById, league,
   }
 }
 
-// ── Verdict 🟢🟡🔴 + raisons ───────────────────────────────────────────────
-function computeVerdict(row: PlayerRow) {
-  const reasons: string[] = []
-  if (row.status === 'SUSPENDED') {
-    row.verdict = 'RED'
-    row.reasons = ['Suspendu — indisponible pour la prochaine journée']
-    return
+export async function getPlayersData(): Promise<{ players: PlayerRow[]; nextGw: number; hasOwnership: boolean }> {
+  const settings = await getSettings()
+  const ctx = await buildCtx()
+  if (!settings.teamId) {
+    const rows = await buildRows(ctx, {})
+    return { players: rows, nextGw: ctx.focusGw, hasOwnership: false }
   }
-  if (row.status === 'INJURED') {
-    row.verdict = 'RED'
-    row.reasons = [`Blessé — ${row.injuryNote ?? 'indisponible'}`]
-    return
-  }
-  if (row.status === 'DOUBTFUL') reasons.push('⚠️ Incertitude physique — test avant le coup d’envoi')
-
-  const formGood = row.form >= 7.0
-  const formBad = row.form < 6.4
-  const minGood = row.expectedMinutes >= 0.62
-  const minBad = row.expectedMinutes <= 0.45 || row.rotationRisk === 'HIGH'
-  const fixGood = row.fixtureScore >= 55
-  const fixBad = row.fixtureScore <= 42
-  const isAttacker = row.position === 'MID' || row.position === 'FWD'
-  const prodGood = isAttacker
-    ? row.stats.apps > 0 && (row.stats.xg + row.stats.xa) / row.stats.apps >= 0.55
-    : row.stats.apps > 0 && row.stats.cleanSheets / row.stats.apps >= 0.4
-
-  let green = 0, red = 0
-  if (formGood) { green++; reasons.push(`📈 Forme : ${row.form}/10 sur les 5 derniers matchs`) }
-  if (formBad) { red++; reasons.push(`📉 Forme en baisse : ${row.form}/10`) }
-  if (minGood) { green++; reasons.push(`⏱️ Temps de jeu solide (${row.minutesPct}% des minutes)`) }
-  if (minBad) { red++; reasons.push(row.rotationRisk === 'HIGH' ? '🔄 Risque de rotation élevé' : `⏱️ Temps de jeu incertain (${row.minutesPct}%)`) }
-  if (fixGood) { green++; reasons.push(`📅 Calendrier favorable sur 5 journées (${Math.round(row.fixtureScore)}/100)`) }
-  if (fixBad) { red++; reasons.push(`📅 Calendrier difficile (${Math.round(row.fixtureScore)}/100)`) }
-  if (prodGood) { green++; reasons.push(isAttacker ? `🎯 Production offensive : ${row.stats.goals}B / ${row.stats.assists}P (xG+xA : ${(row.stats.xg + row.stats.xa).toFixed(1)})` : `🧱 Solide défensivement : ${row.stats.cleanSheets} clean sheets`) }
-  if (row.trend === 'DOWN') { red++; reasons.push('📉 Tendance à la baisse') }
-  if (row.trend === 'UP' && row.projection >= 6.5) { green++; reasons.push('🔥 En progression sur les derniers matchs') }
-  if (row.projection >= 7.2) { green++; reasons.push(`⚡ Projection J+1 élevée : ${row.projection}`) }
-  if (row.projection < 5.6) { red++; reasons.push(`⬇️ Projection J+1 faible : ${row.projection}`) }
-  if (row.ownership >= 40) reasons.push(`👥 Très possédé (${row.ownership}% de la ligue)`)
-  else if (row.ownership <= 10) reasons.push(`💎 Différentiel (${row.ownership}% de la ligue)`)
-
-  row.reasons = reasons
-  if (row.status === 'DOUBTFUL' && red >= 2) { row.verdict = 'RED'; return }
-  if (green >= 4 && row.projection >= 6.8) row.verdict = 'GREEN'
-  else if (red >= 3 || row.projection < 5.5) row.verdict = 'RED'
-  else row.verdict = 'YELLOW'
-  if (reasons.length === 0) row.reasons.push('Profil stable, ni priorité ni urgence')
-}
-
-// ── Alertes ────────────────────────────────────────────────────────────────
-function computeAlerts(
-  rows: Map<string, PlayerRow>,
-  starters: SquadEntry[],
-  rivals: CoachData['rivalsRaw'],
-  captainSuggestion: MyTeamOverview['captainSuggestion'],
-): AlertItem[] {
-  const alerts: AlertItem[] = []
-  const myIds = new Set(starters.map((s) => s.player.id))
-
-  // Risques sur mon effectif
-  for (const s of starters) {
-    const p = s.player
-    if (p.status === 'INJURED' || p.status === 'SUSPENDED') {
-      alerts.push({ id: `sq-${p.id}`, type: 'SQUAD_RISK', severity: 'danger', title: `🚨 ${p.name} indisponible`, detail: p.injuryNote ?? 'Absent pour la prochaine journée — pense à le remplacer.', playerId: p.id })
-    } else if (p.status === 'DOUBTFUL') {
-      alerts.push({ id: `sq-${p.id}`, type: 'SQUAD_RISK', severity: 'warning', title: `⚠️ ${p.name} incertain`, detail: p.injuryNote ?? 'Test physique avant le match — prévois un plan B.', playerId: p.id })
-    } else if (p.rotationRisk === 'HIGH') {
-      alerts.push({ id: `sq-${p.id}`, type: 'SQUAD_RISK', severity: 'warning', title: `🔄 ${p.name} : rotation probable`, detail: `Titularisations récentes limitées (${p.stats.starts}/${p.stats.apps} matchs). Minutes incertaines.`, playerId: p.id })
-    } else if (p.price >= 8 && p.form < 6.6) {
-      alerts.push({ id: `sq-${p.id}`, type: 'UNDERPERF', severity: 'warning', title: `📉 ${p.name} sous-performe`, detail: `Note moyenne de ${p.form}/10 sur 5 matchs pour un joueur à ${p.price}M.`, playerId: p.id })
-    }
-  }
-
-  // Opportunités différentielles
-  for (const p of rows.values()) {
-    if (myIds.has(p.id)) continue
-    if (p.status !== 'FIT') continue
-    if (p.ownership <= 15 && p.projection >= 6.6 && p.trend === 'UP' && p.fixtureScore >= 55) {
-      alerts.push({ id: `op-${p.id}`, type: 'OPPORTUNITY', severity: 'success', title: `💎 Opportunité : ${p.name} (${p.teamShort})`, detail: `Seulement ${p.ownership}% de possession, projection ${p.projection} en J+1, calendrier favorable (${Math.round(p.fixtureScore)}/100). Prix : ${p.price}M.`, playerId: p.id })
-    }
-  }
-
-  // Joueurs en forme
-  for (const p of rows.values()) {
-    if (p.last5.length >= 3) {
-      const last3 = p.last5.slice(0, 3)
-      const avg3 = last3.reduce((a, m) => a + m.rating, 0) / 3
-      if (avg3 >= 7.7 && p.status === 'FIT') {
-        alerts.push({ id: `fm-${p.id}`, type: 'FORM', severity: 'info', title: `🔥 ${p.name} est en feu`, detail: `${avg3.toFixed(1)} de note moyenne sur les 3 derniers matchs. Prochaine affiche : ${p.fixtures[0]?.opp ?? '?'} (${p.fixtures[0]?.venue === 'H' ? 'domicile' : 'extérieur'}).`, playerId: p.id })
+  const myPicks = await picksFor(settings.teamId, ctx.focusGw)
+  const myIds = new Set(myPicks.picks.map((p) => p.element))
+  const ownership = new Map<number, string[]>()
+  if (settings.leagueId) {
+    try {
+      const standing = await fpl.getLeagueStandings(settings.leagueId)
+      for (const res of standing.standings.results) {
+        if (res.entry === settings.teamId) continue
+        try {
+          const picks = await picksFor(res.entry, ctx.focusGw)
+          for (const p of picks.picks) ownership.set(p.element, [...(ownership.get(p.element) ?? []), res.entry_name])
+        } catch { /* ignoré */ }
       }
-    }
+    } catch { /* ligue indisponible */ }
   }
-
-  // Menaces rivaux
-  for (const r of rivals) {
-    for (const p of r.starters) {
-      if (p.projection >= 7.3 && !p.ownedByMe && p.status === 'FIT') {
-        alerts.push({ id: `rv-${r.ownerName}-${p.id}`, type: 'RIVAL_THREAT', severity: 'danger', title: `🎯 ${r.ownerName} aligne ${p.name}`, detail: `${p.projection} de projection en J+1 et il n'est pas dans ton équipe. ${p.ownedByRivals.length > 1 ? `${p.ownedByRivals.length} rivaux le possèdent.` : 'Il est seul à le posséder.'}`, playerId: p.id })
-      }
-    }
-  }
-
-  if (captainSuggestion) {
-    alerts.push({ id: 'cap-1', type: 'CAPTAIN', severity: 'info', title: `🧢 Capitaine : mets le brassard sur ${captainSuggestion.name}`, detail: `Projection de ${captainSuggestion.projection} en J+1 — la plus haute de ton XI.`, playerId: undefined })
-  }
-
-  const order: Record<AlertItem['severity'], number> = { danger: 0, warning: 1, success: 2, info: 3 }
-  return alerts.sort((a, b) => order[a.severity] - order[b.severity]).slice(0, 14)
+  const rows = await buildRows(ctx, { myIds, ownership })
+  return { players: rows, nextGw: ctx.focusGw, hasOwnership: true }
 }
 
-// ── Transferts ─────────────────────────────────────────────────────────────
-function computeTransfers(bank: number, transfersLeft: number, starters: SquadEntry[], bench: SquadEntry[], rows: Map<string, PlayerRow>): TransferPlan {
-  const mine = [...starters, ...bench].map((s) => s.player)
-
-  const sell: SellCandidate[] = mine
-    .filter((p) => p.verdict === 'RED' || p.status !== 'FIT' || p.rotationRisk === 'HIGH' || p.projection < 6.0)
-    .sort((a, b) => a.projection - b.projection)
-    .map((p) => ({
-      player: p,
-      reason: p.status === 'SUSPENDED' ? 'Suspendu — sortie obligatoire'
-        : p.status === 'INJURED' ? 'Blessé — indisponible'
-        : p.status === 'DOUBTFUL' ? 'Incertitude physique'
-        : p.rotationRisk === 'HIGH' ? 'Rotation probable — minutes incertaines'
-        : p.verdict === 'RED' ? verdictLabel('RED') + ' : ' + (p.reasons[0] ?? 'rendement faible')
-        : `Projection faible (${p.projection}) vs marché`,
-    }))
-
-  const budgetAfterSell = bank + Math.max(...sell.map((s) => s.player.price), 0)
-  const myByPos = (pos: Position) => mine.filter((p) => p.position === pos).sort((a, b) => b.projection - a.projection)
-
-  const candidates = [...rows.values()].filter((p) => !p.ownedByMe && p.status === 'FIT')
-  const buys: BuyCandidate[] = []
-  for (const p of candidates) {
-    const samePos = myByPos(p.position)
-    const upgradeTarget = samePos[samePos.length - 1] // le plus faible du poste
-    const netGain = upgradeTarget ? r2(p.projection - upgradeTarget.projection) : null
-    const affordable = p.price <= budgetAfterSell + 0.01
-    const differential = p.ownership <= 12 || p.ownedByRivals.length === 0
-    const valueRatio = p.projection / Math.max(4.4, p.price)
-    const score = p.projection + p.fixtureScore / 100 * 0.4 + (differential ? 0.6 : 0) + valueRatio * 0.3
-    if (p.projection < 5.8) continue
-    buys.push({
-      player: p, netGain, comparedTo: upgradeTarget?.name ?? null, affordable, differential,
-      justification: [
-        `Projection ${p.projection} en J+1 (moy. ${p.projection5} sur 5 journées)`,
-        `Calendrier ${Math.round(p.fixtureScore)}/100`,
-        differential ? `Differential : ${p.ownedByRivals.length === 0 ? 'aucun rival ne le possède' : `seulement ${p.ownership}% de possession`}` : `${p.ownership}% de possession`,
-        p.price <= bank ? `Achetable cash (${p.price}M ≤ ${bank}M en banque)` : affordable ? `Nécessite un sell-up (≈ ${budgetAfterSell.toFixed(1)}M dispo après vente)` : 'Budget insuffisant sans vente',
-      ].join(' • '),
-      _score: score,
-    } as BuyCandidate & { _score: number })
-  }
-
-  const buy = (buys as (BuyCandidate & { _score: number })[])
-    .sort((a, b) => b._score - a._score)
-    .slice(0, 12)
-    .map(({ _score, ...rest }) => rest as BuyCandidate)
-
-  return { bank, transfersLeft, sell, buy }
-}
-
-// ── War Room ───────────────────────────────────────────────────────────────
-export function buildLeagueData(data: CoachData): LeagueData {
-  const myIds = new Set(data.me.starters.map((s) => s.player.id))
-  const rivals: RivalAnalysis[] = data.rivalsRaw.map((r) => {
-    const threats = r.starters
-      .filter((p) => !p.ownedByMe)
-      .sort((a, b) => b.projection - a.projection)
-      .slice(0, 3)
-      .map((p) => ({ name: p.name, position: p.position, teamShort: p.teamShort, projection: p.projection, price: p.price }))
-    const overlap = r.starters.filter((p) => myIds.has(p.id)).length
-    const diff = r.squadScore - data.me.squadScore
-    const threatLevel: RivalAnalysis['threatLevel'] = diff >= 4 ? 'HIGH' : diff >= -2 ? 'MEDIUM' : 'LOW'
-    const topThreat = threats[0]
-    const advice = threatLevel === 'HIGH'
-      ? topThreat
-        ? `${r.ownerName} est devant. Piste n°1 : récupérer ${topThreat.name} (${topThreat.projection} proj.) ou viser un différentiel fort pour compenser.`
-        : `${r.ownerName} est devant. Vise un différentiel à haute projection pour reprendre des points.`
-      : threatLevel === 'MEDIUM'
-        ? `Équilibré avec ${r.ownerName}. Le capitaine et les différentiels feront la différence. Garde ${r.transfersLeft} transfert(s) en tête.`
-        : `${r.ownerName} est derrière sur la projection. Consolide : pas de risque inutile, capitalise sur ton XI.`
-    return {
-      teamName: r.teamName, ownerName: r.ownerName, totalPoints: r.totalPoints, squadScore: r.squadScore,
-      projectedGwPoints: r.projectedGwPoints, threatLevel, overlap, threats, advice,
-      squad: [...r.starters, ...r.bench].map((p) => ({ name: p.name, position: p.position, teamShort: p.teamShort, isCaptain: p.name === r.captain, projection: p.projection, verdict: p.verdict })),
+export async function getFixturesData(): Promise<{ teams: TeamFixtureRow[]; nextGw: number; seasonLabel: string }> {
+  const ctx = await buildCtx()
+  const teams: TeamFixtureRow[] = []
+  for (const t of ctx.teams.values()) {
+    const fixtures: FixtureChip[] = []
+    for (const f of (ctx.upcomingByTeam.get(t.id) ?? [])) {
+      if (fixtures.length >= FIX_WINDOW + 2) break
+      const home = f.team_h === t.id
+      const opp = ctx.teams.get(home ? f.team_a : f.team_h)
+      if (!opp || f.event == null) continue
+      fixtures.push({ gw: f.event, opp: opp.short_name, venue: home ? 'H' : 'A', difficulty: home ? f.team_h_difficulty : f.team_a_difficulty })
     }
-  }).sort((a, b) => b.squadScore - a.squadScore)
-
-  const standings = [
-    { teamName: data.me.teamName, ownerName: data.me.ownerName, isMine: true, totalPoints: data.me.totalPoints, squadScore: data.me.squadScore, projectedGwPoints: data.me.projectedGwPoints },
-    ...data.rivalsRaw.map((r) => ({ teamName: r.teamName, ownerName: r.ownerName, isMine: false, totalPoints: r.totalPoints, squadScore: r.squadScore, projectedGwPoints: r.projectedGwPoints })),
-  ].sort((a, b) => b.totalPoints - a.totalPoints).map((s, i) => ({ ...s, rank: i + 1 }))
-
-  return { myScore: data.me.squadScore, standings, rivals, differentials: data.differentials }
+    const diffs = fixtures.slice(0, FIX_WINDOW).map((f) => f.difficulty)
+    const avgDiff = diffs.length ? diffs.reduce((a, b) => a + b, 0) / diffs.length : 3
+    teams.push({ id: String(t.id), name: t.name, short: t.short_name, fixtures, fixtureScore: clamp(Math.round(((6 - avgDiff) / 5) * 100), 0, 100) })
+  }
+  return { teams, nextGw: ctx.focusGw, seasonLabel: ctx.seasonLabel }
 }

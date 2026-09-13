@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Fantasy Coach Premier League — Copilote de ligue",
-  description: "Copilote personnel d'aide à la décision pour ta ligue Sofascore Fantasy : projections, verdicts, alertes, war room et assistant IA.",
-  keywords: ["Fantasy", "Premier League", "Sofascore", "coach", "projections", "transferts"],
+  title: "Fantasy Coach Premier League — Copilote données réelles",
+  description: "Copilote personnel connecté à l'API officielle Fantasy Premier League : ton équipe réelle, ta ligue privée, projections, verdicts, alertes, war room et assistant IA.",
+  keywords: ["Fantasy", "Premier League", "FPL", "coach", "projections", "transferts", "données réelles"],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
