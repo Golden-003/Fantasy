@@ -177,6 +177,7 @@ async function main() {
       ON CONFLICT (round, club) DO UPDATE SET
         "opponent" = EXCLUDED."opponent", "isHome" = EXCLUDED."isHome",
         "kickoff" = COALESCE(EXCLUDED."kickoff", "Fixture"."kickoff"),
+        "difficulty" = EXCLUDED."difficulty",
         "status" = EXCLUDED."status", "homeGoals" = EXCLUDED."homeGoals", "awayGoals" = EXCLUDED."awayGoals",
         "customId" = EXCLUDED."customId", "updatedAt" = EXCLUDED."updatedAt"`, ...params)
   }
