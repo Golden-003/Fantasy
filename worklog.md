@@ -261,3 +261,20 @@ Work Log:
 Stage Summary:
 - V2 EN LIGNE : thème clair pro, icônes Lucide, 6 onglets, base complète 658 joueurs PL, effectifs+transferts+scores manuels pour les 5 managers (fini les captures), Live inchangé fonctionnellement
 - Seed mis à jour pour le nouveau schéma ; sync-fpl.ts ré-exécutable pour rafraîchir les stats
+
+---
+Task ID: 12
+Agent: Main agent (Super Z)
+Task: Faisabilité synchronisation Sofascore avec identifiants utilisateur (test live)
+
+Work Log:
+- Utilisateur propose de partager ses identifiants Sofascore pour automatiser les données
+- Test live agent-browser (Chromium réel) : www.sofascore.com/fantasy charge (Cloudflare passe sur le HTML) mais la page exige login + widget Turnstile « Verify you are human »
+- API testée depuis contexte navigateur ET navigation directe : api.sofascore.com, api.sofascore.app, www.sofascore.com/api → tous 403 {"reason":"challenge"}
+- curl avec headers app mobile (SofascoreApp/Android) et Safari → 403 Forbidden (blocage IP datacenter)
+- VERDICT : les identifiants ne changent rien — Cloudflare détecte l'automatisation sur l'API indépendamment de l'authentification ; partage de mot de passe = risque sans gain
+
+Stage Summary:
+- Scraping Sofascore impossible depuis l'environnement (avec ou sans identifiants)
+- Voies viables : 1) captures d'écran envoyées dans le chat → lecture + injection directe Neon (sandbox = prod, même base) ; 2) éditeur manuel V2 déjà en ligne ; 3) éventuel collecteur console dans le navigateur de l'utilisateur (semi-auto) si demandé
+- Recommandation transmise à l'utilisateur : ne PAS envoyer le mot de passe
