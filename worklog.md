@@ -241,3 +241,23 @@ Stage Summary:
 - LIVRABLE FINAL : https://fantasy-coach-six.vercel.app — app complète en ligne, base PostgreSQL Neon connectée, données 100% réelles, Live tab opérationnel
 - Sandbox et Vercel pointent vers LA MÊME base → saisies live depuis n'importe quel appareil partagées partout
 - Pas encore branché : auto-deploy git (vercel git connect nécessite permission GitHub App sur le repo Fantasy) — redéploiement manuel CLI fonctionnel en attendant
+
+---
+Task ID: 11
+Agent: Main agent (Super Z)
+Task: V2 — refonte UI complète (fond clair, icônes, onglets épurés) + base 658 joueurs + édition manuelle effectifs/transferts/scores
+
+Work Log:
+- Demandes utilisateur : fond clair, vraies icônes (pas d'emoji), disposition simple, zéro méta-texte « données réelles », épurer les onglets, base joueurs complète « comme Sofascore », édition manuelle de SES transferts ET de ceux des rivaux sans captures
+- DATA : API FPL officielle accessible (658 joueurs réels PL, 20 clubs, 38 journées) → scripts/sync-fpl.ts : upsert 658 joueurs (status/forme/points/minutes/buts/passes/xG/xA/epNext/prix réf £/ownership réf), les 24 sourcés Sofascore conservés (prix €) + fixtures saison complète (380 matches, kickoffs) ; clubs renommés selon source FPL (Man City, Spurs, Leeds…) ; STRONG/PROMOTED réalignés ; Guéhi/Khusanov → Man City, Justin → Leeds (données officielles à jour, transferts été 2026)
+- SCHEMA : Player étendu (status/news/form/totalPoints/minutes/goals/assists/xg/xa/epNext/priceRef/ownershipRef/source) ; SquadSlot.managerId (défaut = id Vital_GDB pour la migration) + @@unique([managerId, playerId]) ; nouveau modèle Transfer (managerId/round/out/in/note) ; Fixture.kickoff ; Manager.squads/transfers ; db push Neon OK
+- MOTEUR réécrit : getTeam(managerSlug) généralisé, getPlayersAll/getPlayerDetail, getCaptainPicks sur projections réelles (epNext+forme+difficulté, plus de noms codés en dur), getTransferFlags dynamiques (statuts/temps de jeu), getMarketTargets (2 meilleurs par poste sur epNext), getAlerts dynamiques, getFixtures (saison complète), getManagerDetail ; saveSquad (validation 15 joueurs, quotas 2/5/5/3, 11 titulaires, 1 capitaine titulaire), saveTransfer (applique à l'effectif : même poste = remplacement direct, poste différent = entrant au banc), deleteTransfer, saveRoundScore (cumuls = dernier totalAfter officiel + points, préserve les totaux capturés) ; BUG corrigé : classement faussé (somme points partielle des rivaux vs totalAfter officiel 333/318/295/283)
+- APIS : /players (liste complète + ?id= détail), /squad PUT, /transfers GET/POST/DELETE, /scores POST, /manager GET ; /api/data supprimée
+- UI (thème clair : slate-50/blanc, boutons noirs, accent rouge) : page.tsx 6 onglets avec icônes Lucide (Accueil/Mon équipe/Ligue/Marché/Live/Assistant), layout dark class retirée, ui-helpers clairs (PosBadge/DiffBadge/StatusBadge/Price € + réf £/Own), PlayerDetailDialog (stats + 5 prochains matchs), PlayerPickerDialog (recherche 658, filtre poste, exclusions), SquadEditor partagé (remplacement/swap titulaire-banc/capitaine, quotas live), TeamTab (terrain clair par lignes + transfert OUT→IN avec application auto + historique supprimable), LeagueTab (classement + fiches managers dépliables : scores inline, effectif éditable, transferts), PlayersTab (recherche + filtres poste/statut/club + tri + pagination), LiveTab restylé (logique autosave refs préservée à l'identique), AssistantTab clair ; 9 onglets → 6 ; DataTab/FixturesTab supprimés ; zéro emoji, zéro mention « sourcé/à confirmer/100% réel »
+- Lint : 3 erreurs setState-synchrones corrigées (états dérivés + pattern render-phase) ; build OK après fix parens ??/||
+- E2E navigateur : Accueil (284 pts 4ᵉ/5 −49, capitaine Haaland 13,3), Mon équipe (terrain 3-5-2, éditeur quotas verts G2/2 D5/5 M5/5 A3/3, picker : Isak Liverpool proj. 6,2, Haaland correctement exclu), Marché (658 joueurs, vraies stats FPL), Ligue (classement corrigé, fiche rival avec actions), Live (fixtures J5 réelles), mobile 390px propre, zéro erreur console
+- Déploiement : commit bc6b121 + 7b1eeef poussés GitHub ; vercel deploy --prod → https://fantasy-coach-six.vercel.app vérifié (284/rang 4/658 joueurs/380 matchs, HTTP 200)
+
+Stage Summary:
+- V2 EN LIGNE : thème clair pro, icônes Lucide, 6 onglets, base complète 658 joueurs PL, effectifs+transferts+scores manuels pour les 5 managers (fini les captures), Live inchangé fonctionnellement
+- Seed mis à jour pour le nouveau schéma ; sync-fpl.ts ré-exécutable pour rafraîchir les stats
