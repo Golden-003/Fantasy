@@ -221,3 +221,23 @@ Work Log:
 Stage Summary:
 - APP EN LIGNE : https://fantasy-coach-six.vercel.app (UI fonctionnelle, base en attente)
 - Aucun secret poussé ; token Vercel utilisé uniquement en local/CLI
+
+---
+Task ID: 10
+Agent: Main agent (Super Z)
+Task: Base de données Neon créée par l'utilisateur → branchement complet + données réelles + vérification live
+
+Work Log:
+- Utilisateur a créé le store Neon « fantasy-db » (store_GYiD6rvOF1UbqnZC, région iad1) et l'a connecté au projet fantasy-coach → 16 env vars injectées (DATABASE_URL, POSTGRES_*, PG*) en cible preview+production
+- Découverte clé : GET /v1/storage/stores/{id}/secrets expose les identifiants (le dashboard les utilise) → récupération DATABASE_URL (pooled) + DATABASE_URL_UNPOOLED
+- prisma db push vers Neon (unpooled) : schéma synchronisé en 11 s ; client généré (Prisma 6.19.2)
+- Seed réel exécuté : 1 ligue, 5 managers, 8 RoundScore, 24 joueurs (15 slots Vital_GDB), 25 fixtures, 5 DataEvents
+- Premier déploiement sans env (13:57) → API en erreur → REDEPLOY après injection → API live OK
+- Vérification production : /api/coach/overview → Rang 4, 284 pts, écart −49, prochaine JD 18 sept ; /api/coach/league → classement réel complet (nik Leroy 333, Donatien_10 318, Aziza FC 295, Vital_GDB 284, Zarés JR 283) ; /api/coach/live?round=5 → rows joueurs ✓
+- Connexion du sandbox à la même base : PIÈGE identifié — l'env système du sandbox écrase .env (DATABASE_URL=file:...) ; correction = lancer dev server avec DATABASE_URL inline ; aperçu local vérifié (Rang 4 / 284 pts)
+- Pooled Neon fonctionne avec Prisma sans param pgbouncer (pooler moderne, prepared statements OK)
+
+Stage Summary:
+- LIVRABLE FINAL : https://fantasy-coach-six.vercel.app — app complète en ligne, base PostgreSQL Neon connectée, données 100% réelles, Live tab opérationnel
+- Sandbox et Vercel pointent vers LA MÊME base → saisies live depuis n'importe quel appareil partagées partout
+- Pas encore branché : auto-deploy git (vercel git connect nécessite permission GitHub App sur le repo Fantasy) — redéploiement manuel CLI fonctionnel en attendant
