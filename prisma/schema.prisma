@@ -57,8 +57,8 @@ model RoundScore {
   @@unique([managerId, round])
 }
 
-// Joueurs réels — base COMPLÈTE de Premier League (658 joueurs, API officielle)
-// price/ownership = valeurs Sofascore quand sourcées (24 joueurs), sinon référence FPL
+// Joueurs réels — 560+ joueurs Sofascore (SSR pages équipes, valeur marché réelle)
+// + enrichissement FPL pour les stats manquantes
 model Player {
   id          String  @id @default(cuid())
   name        String
@@ -69,25 +69,55 @@ model Player {
   ownership   Float? // % détention Sofascore si sourcé
   priceSource String?
   formNote    String?
-  // Stats réelles (API officielle, mises à jour à chaque sync)
+  // Données SOFASCORE RÉELLES (SSR, mises à jour à chaque sync)
+  sofascoreId Int?    @unique // ID Sofascore officiel du joueur
+  marketValue Float?  // valeur marchande réelle Sofascore (€) — ex. Gyökeres 61M
+  lastYearAvg Float?  // note moyenne réelle Sofascore sur les 12 derniers mois
+  lastYearNotes Json? // séries réelles: notes par match + blessures (lastYearSummary)
+  userCount   Int?    // popularité Sofascore (nb followers joueur)
+  jersey      Int?    // numéro de maillot réel
+  country     String? // nationalité
+  // Stats réelles saison courante (agrégées des incidents de match Sofascore)
   status      String  @default("DISPO") // DISPO | DOUTEUX | ABSENT
   news        String? // ex. blessure / suspension
   form        Float?
   totalPoints Int?
   minutes     Int?
-  goals       Int?
-  assists     Int?
+  goals       Int?    // buts RÉELS 26/27 (incidents)
+  assists     Int?    // passes décisives RÉELLES 26/27 (incidents)
   xg          Float?
   xa          Float?
   epNext      Float? // projection points prochaine journée
   priceRef    Float? // prix de référence (£M)
   ownershipRef Float? // % détention de référence
-  fplId       Int?    @unique // ID officiel FPL — clé de synchronisation
-  source      String  @default("FPL")
+  fplId       Int?    @unique // ID officiel FPL — clé de synchronisation secondaire
+  source      String  @default("SOFA-SSR")
   slots       SquadSlot[]
   liveEntries LiveEntry[]
   transfersIn  Transfer[] @relation("transfersIn")
   transfersOut Transfer[] @relation("transfersOut")
+}
+
+// Classement RÉEL Sofascore 26/27 (SSR page tournoi) — base de la difficulté
+model TeamStanding {
+  id          String @id @default(cuid())
+  club        String @unique
+  sofascoreId Int?
+  slug        String?
+  shortName   String?
+  position    Int
+  played      Int
+  wins        Int
+  draws       Int
+  losses      Int
+  gf          Int
+  ga          Int
+  points      Int
+  coach       String?
+  venue       String?
+  updatedAt   String
+
+  @@index([position])
 }
 
 // Effectif courant — POUR LES 5 managers (éditable manuellement dans l'app)
@@ -121,7 +151,7 @@ model Transfer {
   inPlayer    Player? @relation("transfersIn", fields: [inPlayerId], references: [id])
 }
 
-// Calendrier complet de la saison (760 lignes = 380 matches × 2 côtés)
+// Calendrier RÉEL Sofascore (SSR pages match + sitemap officiel)
 // une ligne par club : domicile ET extérieur — chaque joueur retrouve son match
 model Fixture {
   id         String @id @default(cuid())
@@ -129,9 +159,15 @@ model Fixture {
   club       String
   opponent   String
   isHome     Boolean
-  kickoff    String? // date/heure du match (ISO)
-  difficulty Int? // 1-5 (officiel côté domicile, dérivé côté extérieur)
+  kickoff    String? // date/heure RÉELLE du match (ISO, depuis startTimestamp Sofascore)
+  difficulty Int? // 1-5 dérivée de la POSITION RÉELLE au classement + terrain
   source     String
+  // Résultats RÉELS (SSR pages match)
+  status     String? // Ended | Not started | First half…
+  homeGoals  Int?
+  awayGoals  Int?
+  customId   String? // identifiant page match Sofascore
+  updatedAt  String?
 
   @@unique([round, club])
 }

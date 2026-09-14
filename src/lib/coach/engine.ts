@@ -89,7 +89,13 @@ export async function getTeam(managerSlug = 'vital_gdb'): Promise<TeamView> {
   })
   if (!manager) throw new Error('Manager introuvable')
 
-  const fixtures = await db.fixture.findMany({ where: { round: { gte: CURRENT_ROUND } }, orderBy: { round: 'asc' } })
+  const fixtures = await db.fixture.findMany({
+    where: {
+      round: { gte: CURRENT_ROUND },
+      OR: [{ round: { gt: CURRENT_ROUND } }, { status: { not: 'Ended' } }],
+    },
+    orderBy: [{ round: 'asc' }, { kickoff: 'asc' }],
+  })
   const fixByClub = new Map<string, (typeof fixtures)[number]>()
   for (const f of fixtures) if (!fixByClub.has(f.club)) fixByClub.set(f.club, f)
 
@@ -176,8 +182,12 @@ export async function getPlayerDetail(id: string): Promise<PlayerDetail | null> 
   const p = await db.player.findUnique({ where: { id } })
   if (!p) return null
   const fixtures = await db.fixture.findMany({
-    where: { club: p.club, round: { gte: CURRENT_ROUND } },
-    orderBy: { round: 'asc' },
+    where: {
+      club: p.club,
+      round: { gte: CURRENT_ROUND },
+      OR: [{ round: { gt: CURRENT_ROUND } }, { status: { not: 'Ended' } }],
+    },
+    orderBy: [{ round: 'asc' }, { kickoff: 'asc' }],
     take: 5,
   })
   return {
@@ -250,29 +260,47 @@ export async function getTransferFlags(team?: TeamView): Promise<TransferFlag[]>
   return flags.sort((a, b) => order[a.kind] - order[b.kind]).slice(0, 6)
 }
 
-// ── Cibles marché — meilleures projections hors effectif ──────
+// ── Cibles marché — scoring RÉEL Sofascore (buts/assists réels + calendrier) ──
 export async function getMarketTargets(team?: TeamView): Promise<MarketTarget[]> {
   const CURRENT_ROUND = await getCurrentRound()
   const t = team ?? (await getTeam())
   const squadIds = new Set([...t.starters, ...t.bench].map((p) => p.id))
   const players = await db.player.findMany({
-    where: { id: { notIn: [...squadIds] }, status: { not: 'ABSENT' }, epNext: { not: null } },
-    orderBy: { epNext: 'desc' },
-    take: 40,
+    where: { id: { notIn: [...squadIds] }, status: { not: 'ABSENT' } },
+    orderBy: { goals: 'desc' },
+    take: 150,
   })
   const fixtures = await db.fixture.findMany({ where: { round: CURRENT_ROUND } })
   const fixMap = new Map(fixtures.map((f) => [f.club, f]))
-  const targets: MarketTarget[] = players.map((p) => {
-    const fx = fixMap.get(p.club)
-    const dif = fx ? difficultyFromLevel(fx.difficulty, fx.opponent, fx.isHome) : 'MOYEN'
-    return {
-      playerId: p.id, name: p.name, club: p.club, position: p.position as Pos,
-      price: p.price, priceRef: p.priceRef, epNext: p.epNext, form: p.form,
-      rationale: fx
-        ? `J${fx.round} ${fixtureLabel({ opponent: fx.opponent, isHome: fx.isHome })} — ${dif}`
-        : '—',
-    }
-  })
+  const targets = players
+    .map((p) => {
+      const fx = fixMap.get(p.club)
+      const dif = fx ? difficultyFromLevel(fx.difficulty, fx.opponent, fx.isHome) : 'MOYEN'
+      // score réel : production 26/27 (buts ×2.2, passes ×1.4) + projection + forme + calendrier
+      const s =
+        (p.goals ?? 0) * 2.2 +
+        (p.assists ?? 0) * 1.4 +
+        (p.epNext ?? 0) * 0.8 +
+        (p.form ?? 0) * 0.25 +
+        easeBonus(dif) +
+        (p.marketValue != null ? Math.min(2, (p.marketValue / 1_000_000 / 60)) : 0)
+      return {
+        playerId: p.id, name: p.name, club: p.club, position: p.position as Pos,
+        price: p.price, priceRef: p.priceRef, epNext: p.epNext, form: p.form,
+        _score: Math.round(s * 10) / 10,
+        _g: p.goals ?? 0, _a: p.assists ?? 0, _dif: dif,
+        _mv: p.marketValue, _fx: fx,
+      }
+    })
+    .sort((a, b) => b._score - a._score)
+    .map(({ _score, _g, _a, _dif, _mv, _fx, ...p }) => ({
+      ...p,
+      rationale: [
+        _g || _a ? `${_g} but${_g > 1 ? 's' : ''} + ${_a} passes (réel 26/27)` : null,
+        _fx ? `J${_fx.round} ${_fx.isHome ? 'vs' : '@'} ${_fx.opponent} — ${_dif}` : null,
+        _mv != null ? `valeur marché ${Math.round(_mv / 1_000_000)} M€` : null,
+      ].filter(Boolean).join(' · '),
+    }))
   // 2 meilleurs par poste
   const byPos: Record<Pos, MarketTarget[]> = { G: [], D: [], M: [], A: [] }
   for (const t2 of targets) byPos[t2.position].push(t2)

@@ -375,6 +375,30 @@ export async function getAssistantContext(): Promise<string> {
   const { db } = await import('@/lib/db')
   const { getLive } = await import('./engine')
 
+  // ── Données SOFASCORE RÉELLES (classement officiel + top buteurs) ──
+  const [plStandings, topScorers, topAssists] = await Promise.all([
+    db.teamStanding.findMany({ orderBy: { position: 'asc' }, take: 20 }),
+    db.player.findMany({ where: { goals: { gt: 0 } }, orderBy: { goals: 'desc' }, take: 10, select: { name: true, club: true, goals: true, assists: true, marketValue: true } }),
+    db.player.findMany({ where: { assists: { gt: 0 } }, orderBy: { assists: 'desc' }, take: 6, select: { name: true, club: true, assists: true, goals: true } }),
+  ])
+  const plStr = plStandings
+    .map((t) => `${t.position}. ${t.club} — ${t.points} pts (${t.played}J, ${t.wins}V ${t.draws}N ${t.losses}D, ${t.gf}:${t.ga})`)
+    .join('\n')
+  const scorersStr = topScorers
+    .map((p) => `- ${p.name} (${p.club}) : ${p.goals} buts${p.assists ? ` + ${p.assists} passes` : ''}${p.marketValue ? ` — valeur marché ${(p.marketValue / 1_000_000).toFixed(0)} M€` : ''}`)
+    .join('\n')
+  const assistsStr = topAssists
+    .map((p) => `- ${p.name} (${p.club}) : ${p.assists} passes décisives${p.goals ? ` + ${p.goals} buts` : ''}`)
+    .join('\n')
+
+  // résultats réels des derniers matchs joués (J-1 = la dernière journée terminée)
+  const lastPlayed = await db.fixture.findFirst({ where: { status: 'Ended', homeGoals: { not: null } }, orderBy: [{ round: 'desc' }, { kickoff: 'desc' }] })
+  const lastResults = lastPlayed
+    ? (await db.fixture.findMany({ where: { round: lastPlayed.round, isHome: true, homeGoals: { not: null } }, orderBy: { kickoff: 'asc' }, take: 10 }))
+        .map((f) => `${f.club} ${f.homeGoals}-${f.awayGoals} ${f.opponent}`)
+        .join(' | ')
+    : ''
+
   let liveBlock = ''
   const activeLive = await db.liveEntry.findFirst({ orderBy: { updatedAt: 'desc' } })
   if (activeLive) {
@@ -422,10 +446,22 @@ JOURNÉE EN COURS (J${lv.round}${lv.roundDate ? `, ${lv.roundDate}` : ''}) :
 
 RÈGLES 2026/27 : budget 100 M, 15 joueurs (2G/5D/5M/3A), 2 transferts gratuits/journée (cumul max 5, au-delà −5 pts), capitaine ×2, tokens : Triple Captain ×3 (1/saison), Quick Fix (2), Rebuild Squad (2), max 1 token/journée.
 
-SYNCHRO : dernières données officielles du ${a.sync.lastAt ? new Date(a.sync.lastAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'jamais'} · ${a.sync.players} joueurs · ${a.sync.fixtures} lignes calendrier.
+SYNCHRO : dernières données officielles du ${a.sync.lastAt ? new Date(a.sync.lastAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'jamais'} · ${a.sync.players} joueurs · ${a.sync.fixtures} lignes calendrier. Source : scraping SSR sofascore.com (classement, effectifs, valeurs marché, résultats, buteurs).
 ${liveBlock}
-CLASSEMENT :
+CLASSEMENT DE LA LIGUE FANTASY :
 ${classement}
+
+CLASSEMENT RÉEL PREMIER LEAGUE (Sofascore officiel) :
+${plStr}
+
+DERNIERS RÉSULTATS PL RÉELS (J${lastPlayed?.round ?? '?'} — scores officiels Sofascore) :
+${lastResults || '—'}
+
+TOP BUTEURS RÉELS 26/27 (incidents de match) :
+${scorersStr}
+
+TOP PASSEURS RÉELS 26/27 :
+${assistsStr}
 
 TA SITUATION : ${a.league.myRank}${a.league.myRank === 1 ? 'er' : 'e'} avec ${a.league.myTotal ?? '?'} pts, écart leader ${a.league.gapToLeader} (${a.league.leaderName}). Valeur effectif ${frCtx(a.team.squadValue)} M, banque ~${frCtx(a.team.bank)} M.
 
@@ -446,5 +482,5 @@ ${rivalsStr}
 CALENDRIER (3 prochaines journées complètes) :
 ${fixtureStr}
 
-CONSIGNE : n'invente AUCUN chiffre — utilise uniquement ceux du contexte. Si une donnée manque, dis-le. Réponds en français, direct et actionnable (max ~180 mots), sans emoji. Donne toujours ta recommandation avec les raisons chiffrées.`
+CONSIGNE : n'invente AUCUN chiffre — utilise uniquement ceux du contexte. Le classement PL réel, les résultats et les buteurs ci-dessus sont des données Sofascore officielles à jour. Si une donnée manque, dis-le. Réponds en français, direct et actionnable (max ~180 mots), sans emoji. Donne toujours ta recommandation avec les raisons chiffrées.`
 }
