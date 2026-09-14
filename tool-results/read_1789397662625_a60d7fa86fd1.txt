@@ -1,0 +1,537 @@
+    40→    40→  5: '18 sept. 2026',
+    41→    41→  6: '10 oct. 2026',
+    42→    42→  7: '17 oct. 2026',
+    43→    43→  8: '23 oct. 2026',
+    44→    44→}
+    45→    45→
+    46→    46→// Clubs promus — Leeds & Hull cités comme promus dans l'article officiel ;
+    47→    47→// Coventry déduit des fixtures publiées (à confirmer).
+    48→    48→const PROMOTED_OFFICIAL = new Set(['Leeds United', 'Hull City'])
+    49→    49→const PROMOTED_DEDUCE = new Set(['Coventry City'])
+    50→    50→// Clubs forts (top du jeu selon l'article : Arsenal, City, Chelsea, Newcastle, Liverpool)
+    51→    51→const STRONG = new Set(['Arsenal', 'Manchester City', 'Liverpool', 'Chelsea', 'Newcastle United'])
+    52→    52→// Clubs dont les fixtures R4-R8 sont publiées officiellement
+    53→    53→const TRACKED = new Set(['Arsenal', 'Manchester City', 'Chelsea', 'Newcastle United', 'Liverpool'])
+    54→    54→
+    55→    55→// ── Difficulté de fixture — heuristique TRANSPARENTE ───────────
+    56→    56→// Facteurs (affichés à l'utilisateur) : domicile, adversaire promu,
+    57→    57→// adversaire fort, série officiellement clémente du club.
+    58→    58→function fixtureDifficulty(club: string, opponent: string, isHome: boolean): { difficulty: Difficulty; note: string } {
+    59→    59→  if (!TRACKED.has(club)) return { difficulty: 'INCONNU', note: 'Fixture non publiée dans l’article officiel R4-8' }
+    60→    60→  let ease = 0
+    61→    61→  const factors: string[] = []
+    62→    62→  if (isHome) { ease += 1; factors.push('à domicile') }
+    63→    63→  else { factors.push('à l’extérieur') }
+    64→    64→  if (PROMOTED_OFFICIAL.has(opponent)) { ease += 1.5; factors.push(`adversaire promu (${opponent})`) }
+    65→    65→  else if (PROMOTED_DEDUCE.has(opponent)) { ease += 1.25; factors.push(`adversaire promu (${opponent}, déduit des fixtures)`) }
+    66→    66→  if (STRONG.has(opponent)) { ease -= 1; factors.push(`adversaire fort (${opponent})`) }
+    67→    67→  if (TRACKED.has(club)) { ease += 0.5; factors.push('série R4-8 officiellement parmi les 5 plus clémentes (article)') }
+    68→    68→  const difficulty: Difficulty = ease >= 1.5 ? 'FACILE' : ease >= 0.5 ? 'MOYEN' : 'DIFFICILE'
+    69→    69→  return { difficulty, note: factors.join(' · ') }
+    70→    70→}
+    71→    71→
+    72→    72→const easeBonus = (d: Difficulty) => (d === 'FACILE' ? 2 : d === 'MOYEN' ? 1 : 0)
+    73→    73→
+    74→    74→const fixtureLabel = (f: { opponent: string; isHome: boolean }) => `${f.isHome ? 'vs' : '@'} ${f.opponent}`
+    75→    75→
+    76→    76→// ── Mon équipe réelle ──────────────────────────────────────────
+    77→    77→export async function getTeam(): Promise<TeamView> {
+    78→    78→  const slots = await db.squadSlot.findMany({
+    79→    79→    include: { player: true },
+    80→    80→    orderBy: [{ role: 'asc' }, { slotPosition: 'asc' }],
+    81→    81→  })
+    82→    82→  const fixturesR5 = await db.fixture.findMany({ where: { round: 5 } })
+    83→    83→  const fixMap = new Map(fixturesR5.map((f) => [f.club, f]))
+    84→    84→
+    85→    85→  const view = (s: (typeof slots)[number]): SquadPlayerView => {
+    86→    86→    const fx = s.player.clubConfirmed ? fixMap.get(s.player.club) : undefined
+    87→    87→    let fixtureR5: FixtureLite | null = null
+    88→    88→    if (fx) {
+    89→    89→      const { difficulty, note } = fixtureDifficulty(fx.club, fx.opponent, fx.isHome)
+    90→    90→      fixtureR5 = { opponent: fx.opponent, isHome: fx.isHome, difficulty, note }
+    91→    91→    }
+    92→    92→    return {
+    93→    93→      id: s.player.id,
+    94→    94→      name: s.player.name,
+    95→    95→      club: s.player.club,
+    96→    96→      clubConfirmed: s.player.clubConfirmed,
+    97→    97→      position: s.slotPosition as Pos,
+    98→    98→      role: s.role as 'TITULAIRE' | 'BANC',
+    99→    99→      captain: s.captain,
+   100→   100→      pointsR4: s.pointsR4,
+   101→   101→      pointsNote: s.pointsNote,
+   102→   102→      price: s.player.price,
+   103→   103→      ownership: s.player.ownership,
+   104→   104→      priceSource: s.player.priceSource,
+   105→   105→      formNote: s.player.formNote,
+   106→   106→      fixtureR5,
+   107→   107→    }
+   108→   108→  }
+   109→   109→
+   110→   110→  const starters = slots.filter((s) => s.role === 'TITULAIRE').map(view)
+   111→   111→  const bench = slots.filter((s) => s.role === 'BANC').map(view)
+   112→   112→
+   113→   113→  const byPos = (arr: SquadPlayerView[]) => {
+   114→   114→    const g = arr.filter((p) => p.position === 'G').length
+   115→   115→    const d = arr.filter((p) => p.position === 'D').length
+   116→   116→    const m = arr.filter((p) => p.position === 'M').length
+   117→   117→    const a = arr.filter((p) => p.position === 'A').length
+   118→   118→    return [g, d, m, a]
+   119→   119→  }
+   120→   120→  const [, d, m, a] = byPos(starters)
+   121→   121→  const formation = `${d}-${m}-${a}`
+   122→   122→
+   123→   123→  const priced = [...starters, ...bench].filter((p) => p.price != null)
+   124→   124→  const knownSpend = priced.reduce((acc, p) => acc + (p.price ?? 0), 0)
+   125→   125→  const unknown = [...starters, ...bench].filter((p) => p.price == null).map((p) => p.name)
+   126→   126→
+   127→   127→  const scores = await db.roundScore.findMany({ include: { manager: true }, orderBy: { round: 'asc' } })
+   128→   128→  const mine = scores.filter((s) => s.manager.isUser && s.points != null)
+   129→   129→  const at = (r: number) => mine.find((s) => s.round === r)?.points ?? 0
+   130→   130→  const totals = {
+   131→   131→    r1: at(1), r2: at(2), r3: at(3), r4: at(4),
+   132→   132→    total: mine.find((s) => s.round === 4)?.totalAfter ?? mine.reduce((acc, s) => acc + (s.points ?? 0), 0),
+   133→   133→  }
+   134→   134→
+   135→   135→  return {
+   136→   136→    formation,
+   137→   137→    starters,
+   138→   138→    bench,
+   139→   139→    knownSpend: Math.round(knownSpend * 10) / 10,
+   140→   140→    knownPriceCount: priced.length,
+   141→   141→    unknownPriceCount: unknown,
+   142→   142→    totals,
+   143→   143→  }
+   144→   144→}
+   145→   145→
+   146→   146→// ── Capitaine R5 — classement transparent ─────────────────────
+   147→   147→export async function getCaptainPicks(team?: TeamView): Promise<CaptainPick[]> {
+   148→   148→  const t = team ?? (await getTeam())
+   149→   149→  const picks: Omit<CaptainPick, 'rank'>[] = []
+   150→   150→  for (const p of t.starters) {
+   151→   151→    if (!p.fixtureR5 || p.fixtureR5.difficulty === 'INCONNU') continue
+   152→   152→    const reasons: string[] = []
+   153→   153→    let score = 0
+   154→   154→    if (p.pointsR4 != null) {
+   155→   155→      score += p.pointsR4
+   156→   156→      reasons.push(`${p.pointsR4} pts réels en R4 (capture)`)
+   157→   157→    } else if (p.pointsNote) {
+   158→   158→      reasons.push(`points R4 incomplets : ${p.pointsNote}`)
+   159→   159→    }
+   160→   160→    if (p.formNote) {
+   161→   161→      score += 1
+   162→   162→      reasons.push(`forme officielle : ${p.formNote}`)
+   163→   163→    }
+   164→   164→    if (p.captain) {
+   165→   165→      score += 0.5
+   166→   166→      reasons.push('capitaine sortant (R4)')
+   167→   167→    }
+   168→   168→    score += easeBonus(p.fixtureR5.difficulty)
+   169→   169→    reasons.push(`R5 ${fixtureLabel(p.fixtureR5)} — ${p.fixtureR5.difficulty} (${p.fixtureR5.note})`)
+   170→   170→    if (p.ownership != null) reasons.push(`détenu par ${p.ownership}% du jeu (article officiel)`)
+   171→   171→    picks.push({
+   172→   172→      playerId: p.id, name: p.name, club: p.club, position: p.position,
+   173→   173→      fixture: fixtureLabel(p.fixtureR5), difficulty: p.fixtureR5.difficulty,
+   174→   174→      score: Math.round(score * 10) / 10, reasons,
+   175→   175→    })
+   176→   176→  }
+   177→   177→  picks.sort((x, y) => y.score - x.score)
+   178→   178→  return picks.map((p, i) => ({ ...p, rank: i + 1 }))
+   179→   179→}
+   180→   180→
+   181→   181→// ── Vigilance effectif (signaux 100% réels) ───────────────────
+   182→   182→export async function getTransferFlags(): Promise<TransferFlag[]> {
+   183→   183→  const t = await getTeam()
+   184→   184→  const all = [...t.starters, ...t.bench]
+   185→   185→  const by = (n: string) => all.find((p) => p.name === n)
+   186→   186→  const flags: TransferFlag[] = []
+   187→   187→  const push = (name: string, kind: TransferFlag['kind'], reason: string, source: string) => {
+   188→   188→    const p = by(name)
+   189→   189→    if (p) flags.push({ playerId: p.id, name, kind, reason, source })
+   190→   190→  }
+   191→   191→  push('Abdukodir Khusanov', 'SURVEILLER', '0 pt en R4, pas entré en jeu lors du derby — risque de rotation à clarifier avant la clôture R5.', 'Capture 13 sept')
+   192→   192→  push('James Justin', 'DOUTE', 'Points R4 non comptés à la capture (match vs Newcastle pas encore joué) — vérifie son statut et son score final.', 'Capture 13 sept')
+   193→   193→  push('Yoane Wissa', 'DOUTE', 'Match vs Leeds en direct à la capture — ses points R4 finaux sont à vérifier dans l’app.', 'Capture 13 sept')
+   194→   194→  push('Bruno Fernandes', 'SURVEILLER', 'Seulement 4 pts lors du derby perdu 0-1 — surveille la forme de Man United sur R5-R6.', 'Capture 13 sept + résultat vérifié')
+   195→   195→  push('John Egan', 'GARDER', '1 pt en R4 mais cité officiellement parmi les défenseurs en forme du jeu ; la défense de Hull (avec Ajayi) est la défense budget en forme. 4,2 M€, 2,5 % détention : profil différentiel à conserver.', 'Article officiel Picks R4')
+   196→   196→  return flags
+   197→   197→}
+   198→   198→
+   199→   199→// ── Cibles marché (prix 100% sourcés article officiel) ────────
+   200→   200→export async function getMarketTargets(): Promise<MarketTarget[]> {
+   201→   201→  const t = await getTeam()
+   202→   202→  const squadIds = new Set([...t.starters, ...t.bench].map((p) => p.id))
+   203→   203→  const players = await db.player.findMany({ where: { price: { not: null } } })
+   204→   204→  const fixturesR5 = new Map((await db.fixture.findMany({ where: { round: 5 } })).map((f) => [f.club, f]))
+   205→   205→  const targets = players
+   206→   206→    .filter((p) => !squadIds.has(p.id))
+   207→   207→    .map((p) => {
+   208→   208→      const fx = p.clubConfirmed ? fixturesR5.get(p.club) : undefined
+   209→   209→      const dif = fx ? fixtureDifficulty(fx.club, fx.opponent, fx.isHome) : null
+   210→   210→      let rationale = ''
+   211→   211→      if (fx && dif) rationale = `R5 ${fixtureLabel({ opponent: fx.opponent, isHome: fx.isHome })} — ${dif.difficulty}`
+   212→   212→      else rationale = 'Fixture R5 non publiée'
+   213→   213→      return {
+   214→   214→        playerId: p.id, name: p.name, club: p.club, position: p.position as Pos,
+   215→   215→        price: p.price as number, ownership: p.ownership ?? 0, formNote: p.formNote, rationale,
+   216→   216→      }
+   217→   217→    })
+   218→   218→  const rankOrder = ['FACILE', 'MOYEN', 'DIFFICILE', 'INCONNU']
+   219→   219→  targets.sort((a, b) => {
+   220→   220→    const da = rankOrder.indexOf(a.rationale.split(' — ')[1]?.split(' ')[0] ?? 'INCONNU')
+   221→   221→    const dbv = rankOrder.indexOf(b.rationale.split(' — ')[1]?.split(' ')[0] ?? 'INCONNU')
+   222→   222→    return da - dbv || b.ownership - a.ownership
+   223→   223→  })
+   224→   224→  return targets
+   225→   225→}
+   226→   226→
+   227→   227→// ── Alertes (faits réels uniquement) ──────────────────────────
+   228→   228→export async function getAlerts(): Promise<Alert[]> {
+   229→   229→  const alerts: Alert[] = [
+   230→   230→    {
+   231→   231→      level: 'HOT',
+   232→   232→      title: 'nik Leroy a frappé fort en R4',
+   233→   233→      detail: '108 pts pour nik Leroy contre 71 pour toi cette journée : −37 pts d’écart en une seule journée. C’est le seul score rival individuel connu pour l’instant.',
+   234→   234→      source: 'Capture classement 13 sept 21:22',
+   235→   235→    },
+   236→   236→    {
+   237→   237→      level: 'WARN',
+   238→   238→      title: '2 points R4 encore incertains dans ton XI',
+   239→   239→      detail: 'Justin (match vs Newcastle pas joué à la capture) et Wissa (match vs Leeds en direct) : vérifie leurs points finaux R4 dans l’app et envoie la correction si besoin.',
+   240→   240→      source: 'Capture équipe 13 sept 21:45',
+   241→   241→    },
+   242→   242→    {
+   243→   243→      level: 'WARN',
+   244→   244→      title: 'Khusanov : 0 pt, pas entré en jeu au derby',
+   245→   245→      detail: 'Risque de rotation City à clarifier. Sa fixture R5 (vs Sunderland à domicile si le club est confirmé) reste favorable — pas de vente paniquée, mais surveille les compositions.',
+   246→   246→      source: 'Capture équipe 13 sept + derby vérifié',
+   247→   247→    },
+   248→   248→    {
+   249→   249→      level: 'INFO',
+   250→   250→      title: 'R5 — 18 septembre : 2 transferts gratuits',
+   251→   251→      detail: 'Règle officielle 2026/27 : 2 transferts gratuits par journée, cumulables jusqu’à 5. Au-delà : −5 pts par transfert supplémentaire. Tokens : max 1 par journée.',
+   252→   252→      source: 'Article officiel What’s New 2026/27',
+   253→   253→    },
+   254→   254→    {
+   255→   255→      level: 'INFO',
+   256→   256→      title: 'Budget : 44,3 M€ confirmés, 9 prix à confirmer',
+   257→   257→      detail: '6 de tes 15 joueurs ont un prix sourcé officiellement (44,3 M€). Pour les 9 autres, vérifie ton budget réel et tes valeurs dans l’app avant tout transfert — aucun prix n’est inventé ici.',
+   258→   258→      source: 'Article officiel + capture équipe',
+   259→   259→    },
+   260→   260→    {
+   261→   261→      level: 'INFO',
+   262→   262→      title: 'Ta marge sur la 5e place : 1 point',
+   263→   263→      detail: 'Zarés JR est à 283, toi à 284. La lutte pour ne pas finir dernier se joue à rien — chaque journée compte.',
+   264→   264→      source: 'Capture classement 13 sept 21:22',
+   265→   265→    },
+   266→   266→  ]
+   267→   267→  return alerts
+   268→   268→}
+   269→   269→
+   270→   270→// ── Ligue réelle ──────────────────────────────────────────────
+   271→   271→export async function getLeague(): Promise<LeagueView> {
+   272→   272→  const managers = await db.manager.findMany({ orderBy: { sortOrder: 'asc' }, include: { scores: true } })
+   273→   273→  const rows: StandingRow[] = managers.map((m) => {
+   274→   274→    const total = m.scores.find((s) => s.round === 4)?.totalAfter ?? null
+   275→   275→    const r4 = m.scores.find((s) => s.round === 4)?.points ?? null
+   276→   276→    const historyKnown = m.scores.filter((s) => s.points != null).length > 1
+   277→   277→    return {
+   278→   278→      rank: 0, name: m.name, isUser: m.isUser, total, r4,
+   279→   279→      r4Known: r4 != null, historyKnown,
+   280→   280→    }
+   281→   281→  })
+   282→   282→  rows.sort((a, b) => (b.total ?? 0) - (a.total ?? 0))
+   283→   283→  rows.forEach((r, i) => { r.rank = i + 1 })
+   284→   284→  const me = rows.find((r) => r.isUser)!
+   285→   285→  const leader = rows[0]
+   286→   286→  const last = rows[rows.length - 1]
+   287→   287→  return {
+   288→   288→    name: 'Le fond de la classe',
+   289→   289→    season: '2026/27',
+   290→   290→    standings: rows,
+   291→   291→    myRank: me.rank,
+   292→   292→    gapToLeader: (me.total ?? 0) - (leader.total ?? 0),
+   293→   293→    gapToLast: (me.total ?? 0) - (last.total ?? 0),
+   294→   294→    leaderName: leader.name,
+   295→   295→    averageR4Displayed: 64.1,
+   296→   296→    bestR4Displayed: 141,
+   297→   297→    missingData: [
+   298→   298→      'Scores journée par journée de nik Leroy, Donatien_10, Aziza FC et Zarés JR (R1→R3)',
+   299→   299→      'Compositions des 4 rivaux (captures de leur XI si l’app le permet)',
+   300→   300→      'Scores R4 individuels de Donatien_10, Aziza FC et Zarés JR',
+   301→   301→    ],
+   302→   302→  }
+   303→   303→}
+   304→   304→
+   305→   305→// ── Fixtures R5→R8 ────────────────────────────────────────────
+   306→   306→export async function getFixtures(): Promise<{ rounds: Record<number, FixtureView[]>; officialRuns: string }> {
+   307→   307→  const fixtures = await db.fixture.findMany({ where: { round: { gte: 5 } }, orderBy: [{ round: 'asc' }, { club: 'asc' }] })
+   308→   308→  const rounds: Record<number, FixtureView[]> = {}
+   309→   309→  for (const f of fixtures) {
+   310→   310→    const { difficulty, note } = fixtureDifficulty(f.club, f.opponent, f.isHome)
+   311→   311→    const arr = (rounds[f.round] ??= [])
+   312→   312→    arr.push({ round: f.round, club: f.club, opponent: f.opponent, isHome: f.isHome, difficulty, note })
+   313→   313→  }
+   314→   314→  return {
+   315→   315→    rounds,
+   316→   316→    officialRuns:
+   317→   317→      'Classement officiel des séries R4-8 (article Sofascore) : 1. Arsenal (le plus clément de très loin) · 2. Manchester City · 3. Chelsea · 4. Newcastle · 5. Liverpool.',
+   318→   318→  }
+   319→   319→}
+   320→   320→
+   321→   321→// ── TEMPS RÉEL — Match Center live ────────────────────────────
+   322→   322→// Canal live : l'app Sofascore (téléphone de l'utilisateur) reste la
+   323→   323→// source des notes ; il les recopie ici → recalcul instantané.
+   324→   324→// Rivaux : totaux figés aux captures (pas de live possible sans session).
+   325→   325→
+   326→   326→export const LIVE_DEFAULT_ROUND = 5
+   327→   327→
+   328→   328→export async function getLive(round: number): Promise<LiveView> {
+   329→   329→  const [team, entries, liveRound, league] = await Promise.all([
+   330→   330→    getTeam(),
+   331→   331→    db.liveEntry.findMany({ where: { round }, include: { player: true } }),
+   332→   332→    db.liveRound.findUnique({ where: { round } }),
+   333→   333→    getLeague(),
+   334→   334→  ])
+   335→   335→
+   336→   336→  const entryByPlayer = new Map(entries.map((e) => [e.playerId, e]))
+   337→   337→  const rowOf = (p: SquadPlayerView): LivePlayerRow => {
+   338→   338→    const e = entryByPlayer.get(p.id)
+   339→   339→    const fx = p.fixtureR5 ? `${p.fixtureR5.isHome ? 'vs' : '@'} ${p.fixtureR5.opponent}` : null
+   340→   340→    return {
+   341→   341→      playerId: p.id, name: p.name, club: p.club, clubConfirmed: p.clubConfirmed,
+   342→   342→      position: p.position, role: p.role, fixture: fx, pointsR4: p.pointsR4,
+   343→   343→      points: e?.points ?? null, updatedAt: e?.updatedAt ?? null,
+   344→   344→    }
+   345→   345→  }
+   346→   346→  const rows: LivePlayerRow[] = [...team.starters, ...team.bench].map(rowOf)
+   347→   347→
+   348→   348→  const multiplier: 2 | 3 = liveRound?.tripleCaptain ? 3 : 2
+   349→   349→  const captainPlayerId = liveRound?.captainPlayerId ?? null
+   350→   350→  const captainEntry = captainPlayerId ? entryByPlayer.get(captainPlayerId) : undefined
+   351→   351→  const captainIsStarter = rows.some((r) => r.playerId === captainPlayerId && r.role === 'TITULAIRE')
+   352→   352→  const captainPoints = captainIsStarter && captainEntry?.points != null ? captainEntry.points : 0
+   353→   353→  const captainName = rows.find((r) => r.playerId === captainPlayerId)?.name ?? null
+   354→   354→
+   355→   355→  const starterRows = rows.filter((r) => r.role === 'TITULAIRE')
+   356→   356→  const benchRows = rows.filter((r) => r.role === 'BANC')
+   357→   357→  const startersEntered = starterRows.filter((r) => r.points != null).length
+   358→   358→  const startersPoints = starterRows.reduce((acc, r) => acc + (r.points ?? 0), 0)
+   359→   359→  const captainBonus = (multiplier - 1) * captainPoints
+   360→   360→  const benchPoints = benchRows.reduce((acc, r) => acc + (r.points ?? 0), 0)
+   361→   361→  const liveRoundPoints = startersPoints + captainBonus
+   362→   362→  const baseTotal = team.totals.total
+   363→   363→  const updates = entries.map((e) => e.updatedAt).filter(Boolean).sort()
+   364→   364→  const lastUpdate = updates.length ? updates[updates.length - 1] : null
+   365→   365→
+   366→   366→  // Classement simulé : mes points live s'ajoutent à mon total archivé,
+   367→   367→  // rivaux figés à leur dernier total connu (captures).
+   368→   368→  const officialRank = new Map(league.standings.map((s) => [s.name, s.rank]))
+   369→   369→  const sim: LiveStandingRow[] = league.standings.map((s) => ({
+   370→   370→    name: s.name,
+   371→   371→    isUser: s.isUser,
+   372→   372→    baseTotal: s.total,
+   373→   373→    liveRoundPoints: s.isUser ? liveRoundPoints : null,
+   374→   374→    projectedTotal: s.isUser ? baseTotal + liveRoundPoints : s.total,
+   375→   375→    rank: 0,
+   376→   376→    moved: false,
+   377→   377→  }))
+   378→   378→  sim.sort((a, b) => (b.projectedTotal ?? b.baseTotal ?? 0) - (a.projectedTotal ?? a.baseTotal ?? 0))
+   379→   379→  sim.forEach((r, i) => { r.rank = i + 1; r.moved = officialRank.get(r.name) !== r.rank })
+   380→   380→
+   381→   381→  return {
+   382→   382→    round,
+   383→   383→    roundDate: ROUND_DATES[round] ?? null,
+   384→   384→    captainPlayerId,
+   385→   385→    captainName,
+   386→   386→    tripleCaptain: liveRound?.tripleCaptain ?? false,
+   387→   387→    multiplier,
+   388→   388→    rows,
+   389→   389→    live: {
+   390→   390→      startersEntered, startersTotal: starterRows.length,
+   391→   391→      startersPoints, captainBonus, benchPoints, liveRoundPoints,
+   392→   392→      baseTotal, projectedTotal: baseTotal + liveRoundPoints, lastUpdate,
+   393→   393→    },
+   394→   394→    standings: sim,
+   395→   395→  }
+   396→   396→}
+   397→   397→
+   398→   398→export interface LiveSaveInput {
+   399→   399→  tripleCaptain?: boolean
+   400→   400→  captainPlayerId?: string | null
+   401→   401→  entries?: { playerId: string; points: number | null; note?: string }[]
+   402→   402→}
+   403→   403→
+   404→   404→export async function saveLive(round: number, input: LiveSaveInput): Promise<LiveView> {
+   405→   405→  if (!Number.isInteger(round) || round < 1 || round > 38) throw new Error('Journée invalide')
+   406→   406→  const now = new Date().toISOString()
+   407→   407→
+   408→   408→  // État de la journée (capitaine / token)
+   409→   409→  await db.liveRound.upsert({
+   410→   410→    where: { round },
+   411→   411→    update: {
+   412→   412→      captainPlayerId: input.captainPlayerId ?? undefined,
+   413→   413→      tripleCaptain: input.tripleCaptain ?? undefined,
+   414→   414→      updatedAt: now,
+   415→   415→    },
+   416→   416→    create: {
+   417→   417→      round,
+   418→   418→      captainPlayerId: input.captainPlayerId ?? null,
+   419→   419→      tripleCaptain: input.tripleCaptain ?? false,
+   420→   420→      updatedAt: now,
+   421→   421→    },
+   422→   422→  })
+   423→   423→
+   424→   424→  // Saisies de points
+   425→   425→  for (const e of input.entries ?? []) {
+   426→   426→    const data = { round, playerId: e.playerId, points: e.points, note: e.note ?? null, updatedAt: now }
+   427→   427→    await db.liveEntry.upsert({
+   428→   428→      where: { round_playerId: { round, playerId: e.playerId } },
+   429→   429→      update: { points: e.points, note: e.note ?? null, updatedAt: now },
+   430→   430→      create: data,
+   431→   431→    })
+   432→   432→  }
+   433→   433→
+   434→   434→  // Journal : 1 événement max / 10 min par journée (évite le spam d'autosave)
+   435→   435→  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+   436→   436→  const recent = await db.dataEvent.findFirst({
+   437→   437→    where: { kind: 'SAISIE', detail: { contains: `R${round} ·` }, at: { gte: tenMinAgo } },
+   438→   438→  })
+   439→   439→  if (!recent) {
+   440→   440→    await db.dataEvent.create({
+   441→   441→      data: {
+   442→   442→        at: now,
+   443→   443→        kind: 'SAISIE',
+   444→   444→        title: 'Saisie live — Match Center',
+   445→   445→        detail: `R${round} · points recopiés depuis l'app Sofascore par l'utilisateur pendant ou après les matchs (canal temps réel V1).`,
+   446→   446→      },
+   447→   447→    })
+   448→   448→  }
+   449→   449→
+   450→   450→  return getLive(round)
+   451→   451→}
+   452→   452→
+   453→   453→export async function resetLive(round: number): Promise<void> {
+   454→   454→  await db.liveEntry.deleteMany({ where: { round } })
+   455→   455→  await db.liveRound.deleteMany({ where: { round } })
+   456→   456→  await db.dataEvent.create({
+   457→   457→    data: {
+   458→   458→      at: new Date().toISOString(),
+   459→   459→      kind: 'SAISIE',
+   460→   460→      title: 'Saisie live réinitialisée',
+   461→   461→      detail: `R${round} · saisies live effacées (nouvelle journée ou correction).`,
+   462→   462→    },
+   463→   463→  })
+   464→   464→}
+   465→   465→
+   466→   466→// ── Vue d'ensemble ────────────────────────────────────────────
+   467→   467→export async function getOverview(): Promise<Overview> {
+   468→   468→  const [league, team, captains, alerts] = await Promise.all([getLeague(), getTeam(), getCaptainPicks(), getAlerts()])
+   469→   469→  const [playersTracked, pricesSourced, fixturesSourced, dataEvents] = await Promise.all([
+   470→   470→    db.player.count(),
+   471→   471→    db.player.count({ where: { price: { not: null } } }),
+   472→   472→    db.fixture.count(),
+   473→   473→    db.dataEvent.count(),
+   474→   474→  ])
+   475→   475→  return {
+   476→   476→    leagueName: league.name,
+   477→   477→    game: 'Sofascore Fantasy Premier League',
+   478→   478→    season: '2026/27',
+   479→   479→    nextRound: 5,
+   480→   480→    nextRoundDate: ROUND_DATES[5],
+   481→   481→    myRank: league.myRank,
+   482→   482→    myTotal: team.totals.total,
+   483→   483→    gapToLeader: league.gapToLeader,
+   484→   484→    gapToLast: league.gapToLast,
+   485→   485→    leaderName: league.leaderName,
+   486→   486→    captainTop: captains[0] ?? null,
+   487→   487→    alerts: alerts.slice(0, 4),
+   488→   488→    budget: {
+   489→   489→      knownSpend: team.knownSpend,
+   490→   490→      knownCount: team.knownPriceCount,
+   491→   491→      unknownCount: team.unknownPriceCount.length,
+   492→   492→    },
+   493→   493→    dataQuality: { playersTracked, pricesSourced, fixturesSourced, dataEvents },
+   494→   494→  }
+   495→   495→}
+   496→   496→
+   497→   497→// ── Contexte de l'assistant IA (données réelles compactes) ────
+   498→   498→export async function getAssistantContext(): Promise<string> {
+   499→   499→  const [league, team, captains, flags, targets, alerts, fixtures] = await Promise.all([
+   500→   500→    getLeague(), getTeam(), getCaptainPicks(), getTransferFlags(), getMarketTargets(), getAlerts(), getFixtures(),
+   501→   501→  ])
+   502→   502→  // Bloc live : dernières saisies du Match Center (si une journée live est active)
+   503→   503→  const activeLive = await db.liveEntry.findFirst({ orderBy: { updatedAt: 'desc' } })
+   504→   504→  let liveBlock = ''
+   505→   505→  if (activeLive) {
+   506→   506→    const lv = await getLive(activeLive.round)
+   507→   507→    const scored = lv.rows.filter((r) => r.points != null && r.role === 'TITULAIRE')
+   508→   508→    const pending = lv.rows.filter((r) => r.points == null && r.role === 'TITULAIRE')
+   509→   509→    liveBlock = `
+   510→   510→JOURNÉE LIVE (R${lv.round}${lv.roundDate ? `, ${lv.roundDate}` : ''}) — saisies Match Center :
+   511→   511→- Score live de la journée : ${lv.live.liveRoundPoints} pts (titulaires ${lv.live.startersPoints} + bonus capitaine ${lv.live.captainBonus}, ×${lv.multiplier}${lv.captainName ? ` sur ${lv.captainName}` : ''})
+   512→   512→- Total projeté : ${lv.live.projectedTotal} pts (base archivée ${lv.live.baseTotal})
+   513→   513→- Classement simulé : ${lv.standings.map((s) => `${s.rank}. ${s.name} ${s.projectedTotal ?? '?'}${s.moved ? ' (position live)' : ''}`).join(' | ')}
+   514→   514→- Déjà saisis : ${scored.map((r) => `${r.name} ${r.points}`).join(', ') || 'aucun'}
+   515→   515→- En attente : ${pending.map((r) => r.name).join(', ') || 'aucun'}
+   516→   516→(les rivaux sont figés à leur dernier total capturé — pas de live possible sur leurs équipes)
+   517→   517→`
+   518→   518→  }
+   519→   519→  const xi = team.starters
+   520→   520→    .map((p) => {
+   521→   521→      const pts = p.pointsR4 != null ? `${p.pointsR4} pts` : `points incomplets (${p.pointsNote ?? 'match non joué à la capture'})`
+   522→   522→      const prix = p.price != null ? `${p.price}M€` : 'prix à confirmer'
+   523→   523→      const fx = p.fixtureR5 ? `R5 ${p.fixtureR5.isHome ? 'vs' : '@'} ${p.fixtureR5.opponent} (${p.fixtureR5.difficulty})` : 'fixture R5 inconnue'
+   524→   524→      return `- ${p.name} (${p.club}${p.clubConfirmed ? '' : ', club à confirmer'}, ${p.position}, ${prix}) — R4 : ${pts}${p.captain ? ' [C]' : ''} — ${fx}`
+   525→   525→    })
+   526→   526→    .join('\n')
+   527→   527→  const bench = team.bench
+   528→   528→    .map((p) => `${p.name} (${p.club}, ${p.position}${p.price != null ? `, ${p.price}M€` : ''}) : ${p.pointsR4 ?? 'incomplet'}`)
+   529→   529→    .join(', ')
+   530→   530→  const classement = league.standings
+   531→   531→    .map((r) => `${r.rank}. ${r.name} ${r.total ?? '?'} pts${r.r4 != null ? ` (R4 : ${r.r4})` : ' (R4 individuel à confirmer)'}${r.isUser ? ' ← TOI' : ''}`)
+   532→   532→    .join('\n')
+   533→   533→  const cap = captains.slice(0, 4).map((c) => `${c.rank}. ${c.name} — ${c.fixture} — score ${c.score} (${c.reasons.join(' ; ')})`).join('\n')
+   534→   534→  const flagStr = flags.map((f) => `${f.kind} : ${f.name} — ${f.reason}`).join('\n')
+   535→   535→  const targetStr = targets.slice(0, 6).map((t) => `${t.name} (${t.club}, ${t.position}, ${t.price}M€, ${t.ownership}%) — ${t.rationale}${t.formNote ? ` — ${t.formNote}` : ''}`).join('\n')
+   536→   536→  const fixtureStr = Object.entries(fixtures.rounds)
+   537→   537→    .map(([r, arr]) => `R${r} : ${arr.map((f) => `${f.club} ${f.isHome ? 'vs' : '@'} ${f.opponent} [${f.difficulty}]`).join(' | ')}`)
+   538→   538→    .join('\n')
+   539→   539→
+   540→   540→  return `Tu es le coach fantasy personnel de l'utilisateur (équipe VITAL_GDB) dans sa VRAIE ligue privée Sofascore Fantasy Premier League 2026/27 « Le fond de la classe » (5 gestionnaires). Toutes les données ci-dessous sont RÉELLES et sourcées (captures de son app Sofascore du 13/09/2026 + articles officiels Sofascore).
+   541→   541→
+   542→   542→RÈGLES EN VIGUEUR (officielles 2026/27) : budget 100 M€, 15 joueurs (2G/5D/5M/3A), 2 transferts gratuits/journée (cumul max 5, au-delà −5 pts), capitaine ×2, tokens : Triple Captain ×3 (1/saison), Quick Fix (2/saison), Rebuild Squad (2/saison, 1 par mi-saison), max 1 token/journée. Scoring : ratings Sofascore + 30+ catégories.
+   543→   543→${liveBlock}
+   544→   544→CLASSEMENT RÉEL après R4 :
+   545→   545→${classement}
+   546→   546→Moyenne R4 affichée dans l'app : 64,1 · meilleur score affiché : 141 (probablement global, à confirmer).
+   547→   547→
+   548→   548→TON XI RÉEL (points R4 de la capture, formation ${team.formation}) :
+   549→   549→${xi}
+   550→   550→BANC : ${bench}
+   551→   551→Budget confirmé : ${team.knownSpend} M€ sur ${team.knownPriceCount} joueurs ; prix à confirmer pour : ${team.unknownPriceCount.join(', ')}.
+   552→   552→
+   553→   553→FIXTURES OFFICIELLES (article Sofascore) :
+   554→   554→${fixtureStr}
+   555→   555→${fixtures.officialRuns}
+   556→   556→Dates : R5 18 sept · R6 10 oct · R7 17 oct · R8 23 oct.
+   557→   557→
+   558→   558→SUGGESTIONS CAPITAINE R5 (moteur, transparent) :
+   559→   559→${cap}
+   560→   560→
+   561→   561→VIGILANCE EFFECTIF :
+   562→   562→${flagStr}
+   563→   563→
+   564→   564→CIBLES MARCHÉ SOURCÉES (prix officiels) :
+   565→   565→${targetStr}
+   566→   566→
+   567→   567→ALERTES RÉELLES :
+   568→   568→${alerts.map((a) => `- [${a.level}] ${a.title} : ${a.detail}`).join('\n')}
+   569→   569→
+   570→   570→DONNÉES MANQUANTES (dire « à confirmer » si l'utilisateur demande dessus, ne JAMAIS inventer) :
+   571→   571→${league.missingData.map((m) => `- ${m}`).join('\n')}
+   572→   572→- Compositions des rivaux (l'app Sofascore est derrière une connexion : l'utilisateur enverra des captures)
+   573→   573→
+   574→   574→CONSIGNE ABSOLUE : n'invente AUCUN chiffre (prix, points, %, fixtures). Si une donnée manque, dis explicitement « à confirmer » et propose de la vérifier via une capture. Réponds en français, direct et actionnable (max ~180 mots), emojis avec parcimonie (🟢🟡🔴🧢💎). Donne toujours ta recommandation + les raisons sourcées.`
+   575→   575→}
+   576→   576→

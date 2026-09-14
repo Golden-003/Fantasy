@@ -1,148 +1,170 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
+import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
-import type { MarketTarget, Pos } from '@/lib/coach/types'
-import { ConfirmBadge, Own, PlayerAvatar, PosBadge, POS_LABEL, Price, SourceChip } from './ui-helpers'
-import { Search, Target } from 'lucide-react'
+import PlayerDetailDialog from '@/components/coach/PlayerDetailDialog'
+import { Own, PosBadge, Price, StatusBadge, fr } from '@/components/coach/ui-helpers'
+import type { PlayerRow, Pos } from '@/lib/coach/types'
+import { Search } from 'lucide-react'
 
-interface PlayerRow {
-  id: string
-  name: string
-  club: string
-  clubConfirmed: boolean
-  position: Pos
-  price: number | null
-  ownership: number | null
-  priceSource: string | null
-  formNote: string | null
-}
+type SortKey = 'epNext' | 'form' | 'totalPoints' | 'priceRef' | 'minutes'
+type StatusFilter = 'ALL' | 'DISPO' | 'DOUTEUX' | 'ABSENT'
 
-const FILTERS: Array<{ key: 'ALL' | Pos; label: string }> = [
-  { key: 'ALL', label: 'Tous' },
-  { key: 'G', label: 'Gardiens' },
-  { key: 'D', label: 'Défenseurs' },
-  { key: 'M', label: 'Milieux' },
-  { key: 'A', label: 'Attaquants' },
-]
+const PAGE = 50
 
 export default function PlayersTab() {
   const [players, setPlayers] = useState<PlayerRow[] | null>(null)
-  const [targets, setTargets] = useState<MarketTarget[]>([])
-  const [filter, setFilter] = useState<'ALL' | Pos>('ALL')
   const [q, setQ] = useState('')
+  const [pos, setPos] = useState<Pos | 'ALL'>('ALL')
+  const [status, setStatus] = useState<StatusFilter>('ALL')
+  const [sort, setSort] = useState<SortKey>('epNext')
+  const [limit, setLimit] = useState(PAGE)
+  const [detailId, setDetailId] = useState<string | null>(null)
 
   useEffect(() => {
     fetch('/api/coach/players')
       .then((r) => r.json())
-      .then((d) => {
-        setPlayers(d.players ?? [])
-        setTargets(d.targets ?? [])
-      })
-      .catch(console.error)
+      .then((d) => setPlayers(d.players ?? []))
+      .catch(() => setPlayers([]))
   }, [])
 
-  const shown = useMemo(() => {
-    return (players ?? []).filter(
-      (p) =>
-        (filter === 'ALL' || p.position === filter) &&
-        (q.trim() === '' || `${p.name} ${p.club}`.toLowerCase().includes(q.toLowerCase()))
-    )
-  }, [players, filter, q])
+  const clubs = useMemo(() => {
+    if (!players) return []
+    return [...new Set(players.map((p) => p.club))].sort()
+  }, [players])
+  const [club, setClub] = useState<string>('ALL')
+
+  const filtered = useMemo(() => {
+    if (!players) return []
+    const query = q.trim().toLowerCase()
+    const list = players
+      .filter((p) => pos === 'ALL' || p.position === pos)
+      .filter((p) => status === 'ALL' || p.status === status)
+      .filter((p) => club === 'ALL' || p.club === club)
+      .filter((p) => !query || p.name.toLowerCase().includes(query) || p.club.toLowerCase().includes(query))
+    const key = (p: PlayerRow) => (p[sort] ?? (sort === 'priceRef' ? 999 : -1)) as number
+    return [...list].sort((a, b) => key(b) - key(a))
+  }, [players, q, pos, status, club, sort])
 
   if (!players) {
     return (
       <div className="space-y-4">
-        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-16 w-full" />
         <Skeleton className="h-96 w-full" />
       </div>
     )
   }
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Target className="h-4 w-4 text-violet-300" /> Cibles marché sourcées — avant la clôture R5
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="grid gap-2 sm:grid-cols-2">
-          {targets.slice(0, 6).map((t) => (
-            <div key={t.playerId} className="flex items-center gap-3 rounded-lg border border-border bg-zinc-900/40 p-2.5">
-              <PlayerAvatar name={t.name} size="sm" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-semibold">
-                  {t.name} <span className="text-xs font-normal text-zinc-500">{t.club} · <Price value={t.price} /></span>
-                </p>
-                <p className="truncate text-[11px] text-zinc-400">{t.rationale}{t.formNote ? ` · ${t.formNote}` : ''}</p>
-              </div>
-              <div className="text-right text-[11px] text-zinc-500">
-                <Own value={t.ownership} />
-              </div>
-            </div>
-          ))}
-          <p className="text-[11px] text-zinc-500 sm:col-span-2">
-            Prix et % issus de l’article officiel Sofascore du 11 sept 2026. Vérifie ton budget réel dans l’app (9 de tes 15 prix sont encore à confirmer) — 2 transferts gratuits disponibles.
-          </p>
-        </CardContent>
-      </Card>
+    <div className="space-y-3">
+      <div className="relative">
+        <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder={`Rechercher parmi ${players.length} joueurs…`}
+          className="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
+        />
+      </div>
 
+      {/* Filtres */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        {(['ALL', 'G', 'D', 'M', 'A'] as const).map((p) => (
+          <button
+            key={p}
+            onClick={() => { setPos(p); setLimit(PAGE) }}
+            className={`rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
+              pos === p ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            {p === 'ALL' ? 'Tous postes' : p}
+          </button>
+        ))}
+        <span className="mx-1 h-4 w-px bg-slate-200" />
+        {(['ALL', 'DISPO', 'DOUTEUX', 'ABSENT'] as const).map((s) => (
+          <button
+            key={s}
+            onClick={() => { setStatus(s); setLimit(PAGE) }}
+            className={`rounded-lg border px-2.5 py-1 text-xs font-semibold transition ${
+              status === s ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+            }`}
+          >
+            {s === 'ALL' ? 'Tous statuts' : s === 'DISPO' ? 'Dispo' : s === 'DOUTEUX' ? 'Incertain' : 'Absent'}
+          </button>
+        ))}
+        <span className="mx-1 h-4 w-px bg-slate-200" />
+        <select
+          value={club}
+          onChange={(e) => { setClub(e.target.value); setLimit(PAGE) }}
+          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600 focus:outline-none"
+          aria-label="Filtrer par club"
+        >
+          <option value="ALL">Tous clubs</option>
+          {clubs.map((c) => (
+            <option key={c} value={c}>{c}</option>
+          ))}
+        </select>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as SortKey)}
+          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-600 focus:outline-none"
+          aria-label="Trier par"
+        >
+          <option value="epNext">Trier : projection</option>
+          <option value="form">Trier : forme</option>
+          <option value="totalPoints">Trier : points</option>
+          <option value="minutes">Trier : minutes</option>
+          <option value="priceRef">Trier : prix</option>
+        </select>
+      </div>
+
+      {/* Liste */}
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">Base joueurs réelle — {players.length} joueurs tracés</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="mb-3 flex flex-wrap items-center gap-2">
-            <div className="relative flex-1 min-w-[180px]">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-zinc-500" />
-              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Rechercher un joueur ou un club…" className="pl-8" />
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {FILTERS.map((f) => (
+        <CardContent className="p-0">
+          {filtered.length === 0 ? (
+            <p className="py-12 text-center text-sm text-slate-400">Aucun joueur ne correspond.</p>
+          ) : (
+            <div className="divide-y divide-slate-100">
+              {filtered.slice(0, limit).map((p) => (
                 <button
-                  key={f.key}
-                  onClick={() => setFilter(f.key)}
-                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition ${filter === f.key ? 'bg-violet-600 text-white' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
+                  key={p.id}
+                  onClick={() => setDetailId(p.id)}
+                  className="flex w-full items-center gap-2.5 p-3 text-left transition hover:bg-slate-50"
+                  data-testid={`market-${p.name}`}
                 >
-                  {f.label}
+                  <PosBadge pos={p.position} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-slate-900">
+                      {p.name}
+                      {p.status !== 'DISPO' && <span className="ml-2 inline-block"><StatusBadge status={p.status} /></span>}
+                    </span>
+                    <span className="block truncate text-xs text-slate-500">
+                      {p.club} · {p.minutes ?? 0} min · {p.goals ?? 0} b / {p.assists ?? 0} pd
+                    </span>
+                  </span>
+                  <span className="hidden w-12 text-right text-xs tabular-nums text-slate-500 sm:block">{fr(p.form)}</span>
+                  <span className="w-10 text-right text-sm font-bold tabular-nums text-slate-900">{p.totalPoints ?? '—'}</span>
+                  <span className="hidden w-14 text-right text-xs tabular-nums text-slate-500 sm:block">proj. {fr(p.epNext)}</span>
+                  <span className="hidden w-16 text-right sm:block"><Own value={p.ownership} valueRef={p.ownershipRef} /></span>
+                  <span className="w-20 text-right text-sm"><Price value={p.price} priceRef={p.priceRef} /></span>
                 </button>
               ))}
             </div>
-          </div>
-
-          <div className="max-h-[480px] space-y-1.5 overflow-y-auto pr-1">
-            {shown.map((p) => (
-              <div key={p.id} className="flex items-center gap-3 rounded-lg border border-border/60 bg-zinc-900/30 p-2.5">
-                <PlayerAvatar name={p.name} size="sm" />
-                <div className="min-w-0 flex-1">
-                  <p className="flex items-center gap-1.5 truncate text-sm font-semibold">
-                    {p.name} <PosBadge pos={p.position} />
-                    {!p.clubConfirmed && <ConfirmBadge label="club ?" />}
-                  </p>
-                  <p className="truncate text-[11px] text-zinc-500">
-                    {p.club} · <POS_LABEL_POS pos={p.position} />{p.formNote ? ` · ${p.formNote}` : ''}
-                  </p>
-                </div>
-                <div className="flex flex-col items-end gap-0.5">
-                  <Price value={p.price} />
-                  <Own value={p.ownership} />
-                </div>
-              </div>
-            ))}
-            {shown.length === 0 && <p className="py-6 text-center text-sm text-zinc-500">Aucun joueur ne correspond.</p>}
-          </div>
-          <div className="mt-3">
-            <SourceChip source="Article officiel Sofascore « Picks R4 » (11 sept 2026) + captures Vital_GDB" />
-          </div>
+          )}
         </CardContent>
       </Card>
+
+      {filtered.length > limit && (
+        <button
+          onClick={() => setLimit((l) => l + PAGE)}
+          className="w-full rounded-xl border border-slate-200 bg-white py-2.5 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+        >
+          Afficher plus ({filtered.length - limit} restants)
+        </button>
+      )}
+
+      <PlayerDetailDialog playerId={detailId} onClose={() => setDetailId(null)} />
     </div>
   )
-}
-
-function POS_LABEL_POS({ pos }: { pos: Pos }) {
-  return <>{POS_LABEL[pos]}</>
 }

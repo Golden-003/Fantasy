@@ -40,6 +40,8 @@ model Manager {
   leagueId  String  @default("lefond")
   league    League  @relation(fields: [leagueId], references: [id])
   scores    RoundScore[]
+  squads    SquadSlot[]
+  transfers Transfer[]
 }
 
 // Points réels par journée (ce qui a été vu sur les captures)
@@ -55,41 +57,77 @@ model RoundScore {
   @@unique([managerId, round])
 }
 
-// Joueurs réels — prix/ownership uniquement si sourcés officiellement
+// Joueurs réels — base COMPLÈTE de Premier League (658 joueurs, API officielle)
+// price/ownership = valeurs Sofascore quand sourcées (24 joueurs), sinon référence FPL
 model Player {
   id          String  @id @default(cuid())
   name        String
   club        String
-  clubConfirmed Boolean @default(true) // false = badge illisible sur capture
+  clubConfirmed Boolean @default(true)
   position    String // G | D | M | A
-  price       Float? // null = prix à confirmer (JAMAIS inventé)
-  ownership   Float? // % détention dans le jeu, null = inconnu
+  price       Float? // prix Sofascore (M€) si sourcé
+  ownership   Float? // % détention Sofascore si sourcé
   priceSource String?
-  formNote    String? // mention de forme issue de l'article officiel
+  formNote    String?
+  // Stats réelles (API officielle, mises à jour à chaque sync)
+  status      String  @default("DISPO") // DISPO | DOUTEUX | ABSENT
+  news        String? // ex. blessure / suspension
+  form        Float?
+  totalPoints Int?
+  minutes     Int?
+  goals       Int?
+  assists     Int?
+  xg          Float?
+  xa          Float?
+  epNext      Float? // projection points prochaine journée
+  priceRef    Float? // prix de référence (£M)
+  ownershipRef Float? // % détention de référence
+  source      String  @default("FPL")
   slots       SquadSlot[]
   liveEntries LiveEntry[]
+  transfersIn  Transfer[] @relation("transfersIn")
+  transfersOut Transfer[] @relation("transfersOut")
 }
 
-// Effectif réel de Vital_GDB (capture 13 sept 21:45)
+// Effectif courant — POUR LES 5 managers (éditable manuellement dans l'app)
 model SquadSlot {
   id           String  @id @default(cuid())
-  playerId     String  @unique
+  playerId     String
+  managerId    String  @default("cmu1bnqaq0003lztqvp5plo3k") // défaut = migration slots existants (Vital_GDB)
   role         String // TITULAIRE | BANC
   slotPosition String // G | D | M | A
   captain      Boolean @default(false)
   round        Int     @default(4)
-  pointsR4     Int? // points R4 visibles sur la capture (null = match pas joué)
-  pointsNote   String? // ex: « match vs Newcastle pas encore joué à la capture »
+  pointsR4     Int?
+  pointsNote   String?
   player       Player  @relation(fields: [playerId], references: [id])
+  manager      Manager @relation(fields: [managerId], references: [id])
+
+  @@unique([managerId, playerId])
 }
 
-// Fixtures réelles R4→R8 (article officiel « Best fixture runs R4-8 »)
+// Transferts saisis manuellement (lui + les 4 rivaux) — remplace les captures
+model Transfer {
+  id          String  @id @default(cuid())
+  managerId   String
+  round       Int
+  outPlayerId String?
+  inPlayerId  String?
+  note        String?
+  createdAt   String
+  manager     Manager @relation(fields: [managerId], references: [id])
+  outPlayer   Player? @relation("transfersOut", fields: [outPlayerId], references: [id])
+  inPlayer    Player? @relation("transfersIn", fields: [inPlayerId], references: [id])
+}
+
+// Calendrier complet de la saison (380 matches, API officielle)
 model Fixture {
   id       String @id @default(cuid())
   round    Int
   club     String
   opponent String
   isHome   Boolean
+  kickoff  String? // date/heure du match (ISO)
   source   String
 
   @@unique([round, club])

@@ -1,39 +1,46 @@
-// Types partagés du moteur coach — Sofascore Fantasy V1
+// Types partagés du moteur coach — Sofascore Fantasy V2
 export type Pos = 'G' | 'D' | 'M' | 'A'
-export type Difficulty = 'FACILE' | 'MOYEN' | 'DIFFICILE' | 'INCONNU'
+export type Difficulty = 'FACILE' | 'MOYEN' | 'DIFFICILE'
+export type PlayerStatus = 'DISPO' | 'DOUTEUX' | 'ABSENT'
 
 export interface FixtureLite {
   opponent: string
   isHome: boolean
   difficulty: Difficulty
-  note: string
+  kickoff: string | null
 }
 
 export interface SquadPlayerView {
   id: string
   name: string
   club: string
-  clubConfirmed: boolean
   position: Pos
   role: 'TITULAIRE' | 'BANC'
   captain: boolean
   pointsR4: number | null
-  pointsNote: string | null
-  price: number | null
-  ownership: number | null
-  priceSource: string | null
-  formNote: string | null
-  fixtureR5: FixtureLite | null
+  price: number | null // prix Sofascore (M€) si sourcé
+  priceRef: number | null // prix de référence (£M)
+  status: PlayerStatus
+  news: string | null
+  form: number | null
+  totalPoints: number | null
+  minutes: number | null
+  epNext: number | null
+  fixtureNext: FixtureLite | null
+  round: number // journée de la fixture affichée
 }
 
 export interface TeamView {
+  managerId: string
+  managerName: string
+  isUser: boolean
   formation: string
   starters: SquadPlayerView[]
   bench: SquadPlayerView[]
   knownSpend: number
   knownPriceCount: number
-  unknownPriceCount: string[]
-  totals: { r1: number; r2: number; r3: number; r4: number; total: number }
+  squadValueRef: number
+  totals: { rounds: { round: number; points: number | null; totalAfter: number | null }[]; total: number | null }
 }
 
 export interface CaptainPick {
@@ -53,7 +60,6 @@ export interface TransferFlag {
   name: string
   kind: 'SURVEILLER' | 'GARDER' | 'DOUTE'
   reason: string
-  source: string
 }
 
 export interface MarketTarget {
@@ -61,9 +67,10 @@ export interface MarketTarget {
   name: string
   club: string
   position: Pos
-  price: number
-  ownership: number
-  formNote: string | null
+  price: number | null
+  priceRef: number | null
+  epNext: number | null
+  form: number | null
   rationale: string
 }
 
@@ -71,30 +78,29 @@ export interface Alert {
   level: 'HOT' | 'WARN' | 'INFO'
   title: string
   detail: string
-  source: string
 }
 
 export interface StandingRow {
   rank: number
+  id: string
+  slug: string
   name: string
   isUser: boolean
   total: number | null
-  r4: number | null
-  r4Known: boolean
-  historyKnown: boolean
+  lastRound: number | null
+  lastPoints: number | null
+  roundsKnown: number
 }
 
 export interface LeagueView {
   name: string
   season: string
+  currentRound: number
   standings: StandingRow[]
   myRank: number
   gapToLeader: number
   gapToLast: number
   leaderName: string
-  averageR4Displayed: number
-  bestR4Displayed: number
-  missingData: string[]
 }
 
 export interface FixtureView {
@@ -103,28 +109,63 @@ export interface FixtureView {
   opponent: string
   isHome: boolean
   difficulty: Difficulty
-  note: string
+  kickoff: string | null
 }
 
-export interface Overview {
-  leagueName: string
-  game: string
-  season: string
-  nextRound: number
-  nextRoundDate: string
-  myRank: number
-  myTotal: number
-  gapToLeader: number
-  leaderName: string
-  captainTop: CaptainPick | null
-  alerts: Alert[]
-  budget: { knownSpend: number; knownCount: number; unknownCount: number }
-  dataQuality: {
-    playersTracked: number
-    pricesSourced: number
-    fixturesSourced: number
-    dataEvents: number
-  }
+// ── Base joueurs complète ──────────────────────────────────────
+
+export interface PlayerRow {
+  id: string
+  name: string
+  club: string
+  position: Pos
+  price: number | null
+  priceRef: number | null
+  status: PlayerStatus
+  form: number | null
+  totalPoints: number | null
+  minutes: number | null
+  goals: number | null
+  assists: number | null
+  epNext: number | null
+  ownership: number | null
+  ownershipRef: number | null
+}
+
+export interface PlayerDetail extends PlayerRow {
+  news: string | null
+  xg: number | null
+  xa: number | null
+  source: string
+  fixtures: FixtureLite[] & { round?: number }[]
+  fixturesDetailed: { round: number; opponent: string; isHome: boolean; difficulty: Difficulty; kickoff: string | null }[]
+}
+
+export interface TransferItem {
+  id: string
+  round: number
+  outName: string | null
+  inName: string | null
+  note: string | null
+  createdAt: string
+}
+
+export interface RoundScoreItem {
+  round: number
+  points: number | null
+  totalAfter: number | null
+}
+
+export interface ManagerDetail {
+  id: string
+  slug: string
+  name: string
+  isUser: boolean
+  squad: SquadPlayerView[]
+  formation: string
+  transfers: TransferItem[]
+  scores: RoundScoreItem[]
+  total: number | null
 }
 
 // ── Temps réel (Match Center live) ─────────────────────────────
@@ -133,12 +174,10 @@ export interface LivePlayerRow {
   playerId: string
   name: string
   club: string
-  clubConfirmed: boolean
   position: Pos
   role: 'TITULAIRE' | 'BANC'
   fixture: string | null
   pointsR4: number | null
-  // état live
   points: number | null
   updatedAt: string | null
 }
@@ -146,11 +185,11 @@ export interface LivePlayerRow {
 export interface LiveStandingRow {
   name: string
   isUser: boolean
-  baseTotal: number | null // total archivé (ex: après R4)
-  liveRoundPoints: number | null // points live de la journée (utilisateur seulement)
-  projectedTotal: number | null // base + live pour l'utilisateur
+  baseTotal: number | null
+  liveRoundPoints: number | null
+  projectedTotal: number | null
   rank: number
-  moved: boolean // position changeante grâce au live
+  moved: boolean
 }
 
 export interface LiveView {
@@ -164,13 +203,30 @@ export interface LiveView {
   live: {
     startersEntered: number
     startersTotal: number
-    startersPoints: number // somme brute des titulaires saisis
-    captainBonus: number // bonus capitaine (multiplier-1) × points du capitaine saisis
-    benchPoints: number // info : banc saisi (remplacements appliqués par le jeu à la clôture)
-    liveRoundPoints: number // total live de la journée (titulaires + bonus capitaine)
-    baseTotal: number // total archivé (ex: 284 après R4)
-    projectedTotal: number // base + live
+    startersPoints: number
+    captainBonus: number
+    benchPoints: number
+    liveRoundPoints: number
+    baseTotal: number
+    projectedTotal: number
     lastUpdate: string | null
   }
   standings: LiveStandingRow[]
+}
+
+export interface Overview {
+  leagueName: string
+  season: string
+  nextRound: number
+  nextRoundDate: string | null
+  myRank: number
+  myTotal: number
+  gapToLeader: number
+  gapToLast: number
+  leaderName: string
+  captainTop: CaptainPick | null
+  alerts: Alert[]
+  squadSize: number
+  playerCount: number
+  fixtureCount: number
 }

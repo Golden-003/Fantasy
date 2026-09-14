@@ -16,15 +16,15 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Fantasy Coach — Le fond de la classe (Sofascore 2026/27)",
   description:
-    "Copilote de coaching pour ta ligue privée Sofascore Fantasy Premier League : équipe réelle Vital_GDB, classement réel, prix et fixtures officiels, capitaine, transferts et assistant IA ancré sur les données réelles.",
-  keywords: ["Sofascore Fantasy", "Premier League", "coach", "Le fond de la classe", "Vital_GDB", "données réelles"],
+    "Copilote de coaching pour ta ligue privée Sofascore Fantasy Premier League : effectifs, transferts, scores, capitaine, points live et assistant.",
+  keywords: ["Sofascore Fantasy", "Premier League", "coach", "Le fond de la classe", "Vital_GDB"],
   icons: {
     icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#09090b",
+  themeColor: "#f8fafc",
 };
 
 export default function RootLayout({
@@ -33,7 +33,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="fr" className="dark" suppressHydrationWarning>
+    <html lang="fr" suppressHydrationWarning>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >

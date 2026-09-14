@@ -120,11 +120,13 @@ async function main() {
         ownership: p.own ?? null,
         priceSource: p.src ?? null,
         formNote: p.form ?? null,
+        source: 'SOFASCORE-ARTICLE',
       },
     })
     if (p.role) {
       await db.squadSlot.create({
         data: {
+          managerId: vital.id,
           playerId: created.id,
           role: p.role,
           slotPosition: p.pos,
