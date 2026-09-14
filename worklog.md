@@ -204,3 +204,20 @@ Stage Summary:
 - Le code est 100% prêt pour Vercel : build validé sans base locale, repli IA robuste, schéma PostgreSQL
 - La base SQLite locale (db/custom.db) reste utilisable jusqu'au basculement ; toutes les données réelles sont reconstituables par re-seed déterministe
 - Action utilisateur restante : créer un token Vercel (vercel.com → sign in GitHub → account/tokens)
+
+---
+Task ID: 9
+Agent: Main agent (Super Z)
+Task: Déploiement Vercel de l'app avec le token de l'utilisateur
+
+Work Log:
+- Token vcp_1wUx... validé : compte goldinosaure (vitaldohou31@gmail.com), plan Hobby, équipe vitaldohou31-6974s-projects ; 4 projets existants (fantasy-coach créé vierge, aura-intime, dedco, dedco-app)
+- Vercel CLI 59.16.0 installé ; vercel link --project fantasy-coach (OIDC ok)
+- Création de base via API REST impossible (POST /v1 et /v2 storage/stores → not_found ; marketplace réservé dashboard) → plan : déploiement d'abord, base connectée par l'utilisateur ensuite (auto-injection DATABASE_URL + redeploy auto)
+- vercel deploy --prod : upload + bun install + postinstall prisma generate + next build (33 s) → READY en 54 s
+- URL production : https://fantasy-coach-six.vercel.app (alias) — homepage HTTP 200 ✓ ; /api/coach/overview → erreur moteur attendue (DATABASE_URL absente)
+- Prochaines étapes : utilisateur crée la base Postgres (Neon) dans le dashboard Storage + la connecte au projet fantasy-coach → je lis DATABASE_URL via API (decrypt) → prisma db push + seed réel → vérification finale
+
+Stage Summary:
+- APP EN LIGNE : https://fantasy-coach-six.vercel.app (UI fonctionnelle, base en attente)
+- Aucun secret poussé ; token Vercel utilisé uniquement en local/CLI
