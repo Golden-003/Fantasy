@@ -278,3 +278,26 @@ Stage Summary:
 - Scraping Sofascore impossible depuis l'environnement (avec ou sans identifiants)
 - Voies viables : 1) captures d'écran envoyées dans le chat → lecture + injection directe Neon (sandbox = prod, même base) ; 2) éditeur manuel V2 déjà en ligne ; 3) éventuel collecteur console dans le navigateur de l'utilisateur (semi-auto) si demandé
 - Recommandation transmise à l'utilisateur : ne PAS envoyer le mot de passe
+
+---
+Task ID: 13
+Agent: Main agent (Super Z)
+Task: V3 — correction matchs manquants, données officielles à jour, assistant analyste complet
+
+Work Log:
+- BUG racine confirmé : fixtures stockées domicile seul (10 lignes/JD) → joueurs des clubs à l'extérieur sans match affiché (diagnostic exact de l'utilisateur)
+- Schema : Player.fplId (unique), Fixture.difficulty (1-5), modèle SyncState ; db push Neon OK
+- fplsync.ts partagé (CLI + API) : 658 joueurs upsert (fplId, stats, statuts, prix réf), 760 lignes calendrier (les DEUX côtés), difficulté officielle côté domicile + dérivée forces officielles côté extérieur, SyncState currentRound/lastSync
+- Salah absent de FPL 2026/27 (vérifié à la source — départ PL) ; "Araujo Liverpool" est un vrai élément FPL 2026/27
+- engine.ts : getCurrentRound() dynamique (SyncState → kickoffs → 5, cache 60 s) remplace CURRENT_ROUND codé ; difficultyFromLevel stockée ; getLive/getFixtures paramètres optionnels ; prix affichés M€ (sourcés) vs réf. M£ (FPL)
+- analysis.ts : getAnalysis() = prédiction XI optimal (brute force C(15,11) + quotas), capitaine prédit, projection fourchette pts, matrice capitaine (epNext+forme+per90+difficulté+ownership), moteur transferts OUT→IN (vente par risque, achat par gain, banque calculée), comparaisons rivaux (valeur, onze projeté, verdict), calendrier 3 JD ; getAssistantContext réécrit sur l'analyse (import circulaire évité : contexte dans analysis.ts)
+- APIs : GET /api/coach/analysis (retry ×2), POST /api/sync (maxDuration 60, throttle 45 s) ; fallback assistant rule-based sans emoji
+- UI : AssistantTab = briefing (Sync badge + Actualiser, Prédiction, Matrice capitaine, Transferts, Comparaisons avec barres, Calendrier) + chat conservé ; Dashboard = bouton Actualiser + date maj
+- E2E : accueil OK, Mon équipe terrain OK, détail Szoboszlai montre @ Bournemouth/@ Brentford (extérieurs présents ✓), assistant briefing complet (61,1-69,3 pts, cap Haaland, transferts Fernandes→Groß gain 9,5), IA répond chiffré via contexte moteur
+- Lenteur dev (33 s analyse) = artefact sandbox↔Neon ; prod Vercel↔Neon iad1 rapide
+- Deploy : commit da219cd → GitHub ; vercel --prod OK ; vérifié : homepage 200, analysis J5/658/760, pred 4-4-2 cap Haaland, J5=20 lignes, /api/sync 200
+
+Stage Summary:
+- V3 EN LIGNE : bug des matchs (domicile seul) corrigé à la racine, données rafraîchissables en 1 clic (Actualiser), assistant = vrai analyste chiffré (prédiction, capitaine, transferts, comparaisons)
+- Effectifs rivaux vides (saisie utilisateur requise dans l'onglet Ligue pour activer les comparaisons chiffrées)
+- Prix : 24 sourcés Sofascore (M€) + 634 réf FPL (M£) — prix exacts Sofascore inaccessibles (Cloudflare)
