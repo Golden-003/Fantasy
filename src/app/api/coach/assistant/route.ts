@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import ZAI from 'z-ai-web-dev-sdk'
 import { getAssistantContext } from '@/lib/coach/engine'
 
 export const dynamic = 'force-dynamic'
@@ -18,6 +17,9 @@ export async function POST(req: Request) {
     // Contexte 100% données réelles (captures + articles officiels Sofascore)
     const context = await getAssistantContext()
 
+    // Import dynamique : si le SDK n'est pas disponible/paramétrable
+    // (ex. déploiement Vercel sans identifiants), on bascule sur le repli.
+    const { default: ZAI } = await import('z-ai-web-dev-sdk')
     const zai = await ZAI.create()
     const completion = await zai.chat.completions.create({
       messages: [
