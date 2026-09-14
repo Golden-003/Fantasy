@@ -1,0 +1,23 @@
+name: Sofa SSR probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Test acces SSR Sofascore
+        run: |
+          echo "=== Node fetch ==="
+          node -e "
+            fetch('https://www.sofascore.com/tournament/football/england/premier-league/17', {
+              headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36', 'Accept-Language': 'fr-FR' }
+            }).then(async r => {
+              const html = await r.text();
+              const hasData = html.includes('__NEXT_DATA__') && html.includes('standings');
+              console.log('HTTP', r.status, '| NEXT_DATA+standings:', hasData, '| taille:', html.length);
+            }).catch(e => console.log('ERR', e.message));
+          "
+          echo "=== curl ==="
+          curl -s -o /tmp/sofa.html -w "HTTP %{http_code}\n" -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36" "https://www.sofascore.com/tournament/football/england/premier-league/17" && grep -c "standings" /tmp/sofa.html || echo "pas de standings"
