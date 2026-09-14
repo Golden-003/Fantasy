@@ -12,8 +12,8 @@
 import { db } from '@/lib/db'
 import type {
   Alert, CaptainPick, Difficulty, FixtureLite, FixtureView, LeagueView,
-  MarketTarget, Overview, Pos, SquadPlayerView, StandingRow, TeamView,
-  TransferFlag,
+  LivePlayerRow, LiveStandingRow, LiveView, MarketTarget, Overview, Pos,
+  SquadPlayerView, StandingRow, TeamView, TransferFlag,
 } from './types'
 
 // ── Règles officielles vérifiées (ARTICLE-NOUVEAUTES-2627) ──────
@@ -318,6 +318,151 @@ export async function getFixtures(): Promise<{ rounds: Record<number, FixtureVie
   }
 }
 
+// ── TEMPS RÉEL — Match Center live ────────────────────────────
+// Canal live : l'app Sofascore (téléphone de l'utilisateur) reste la
+// source des notes ; il les recopie ici → recalcul instantané.
+// Rivaux : totaux figés aux captures (pas de live possible sans session).
+
+export const LIVE_DEFAULT_ROUND = 5
+
+export async function getLive(round: number): Promise<LiveView> {
+  const [team, entries, liveRound, league] = await Promise.all([
+    getTeam(),
+    db.liveEntry.findMany({ where: { round }, include: { player: true } }),
+    db.liveRound.findUnique({ where: { round } }),
+    getLeague(),
+  ])
+
+  const entryByPlayer = new Map(entries.map((e) => [e.playerId, e]))
+  const rowOf = (p: SquadPlayerView): LivePlayerRow => {
+    const e = entryByPlayer.get(p.id)
+    const fx = p.fixtureR5 ? `${p.fixtureR5.isHome ? 'vs' : '@'} ${p.fixtureR5.opponent}` : null
+    return {
+      playerId: p.id, name: p.name, club: p.club, clubConfirmed: p.clubConfirmed,
+      position: p.position, role: p.role, fixture: fx, pointsR4: p.pointsR4,
+      points: e?.points ?? null, updatedAt: e?.updatedAt ?? null,
+    }
+  }
+  const rows: LivePlayerRow[] = [...team.starters, ...team.bench].map(rowOf)
+
+  const multiplier: 2 | 3 = liveRound?.tripleCaptain ? 3 : 2
+  const captainPlayerId = liveRound?.captainPlayerId ?? null
+  const captainEntry = captainPlayerId ? entryByPlayer.get(captainPlayerId) : undefined
+  const captainIsStarter = rows.some((r) => r.playerId === captainPlayerId && r.role === 'TITULAIRE')
+  const captainPoints = captainIsStarter && captainEntry?.points != null ? captainEntry.points : 0
+  const captainName = rows.find((r) => r.playerId === captainPlayerId)?.name ?? null
+
+  const starterRows = rows.filter((r) => r.role === 'TITULAIRE')
+  const benchRows = rows.filter((r) => r.role === 'BANC')
+  const startersEntered = starterRows.filter((r) => r.points != null).length
+  const startersPoints = starterRows.reduce((acc, r) => acc + (r.points ?? 0), 0)
+  const captainBonus = (multiplier - 1) * captainPoints
+  const benchPoints = benchRows.reduce((acc, r) => acc + (r.points ?? 0), 0)
+  const liveRoundPoints = startersPoints + captainBonus
+  const baseTotal = team.totals.total
+  const updates = entries.map((e) => e.updatedAt).filter(Boolean).sort()
+  const lastUpdate = updates.length ? updates[updates.length - 1] : null
+
+  // Classement simulé : mes points live s'ajoutent à mon total archivé,
+  // rivaux figés à leur dernier total connu (captures).
+  const officialRank = new Map(league.standings.map((s) => [s.name, s.rank]))
+  const sim: LiveStandingRow[] = league.standings.map((s) => ({
+    name: s.name,
+    isUser: s.isUser,
+    baseTotal: s.total,
+    liveRoundPoints: s.isUser ? liveRoundPoints : null,
+    projectedTotal: s.isUser ? baseTotal + liveRoundPoints : s.total,
+    rank: 0,
+    moved: false,
+  }))
+  sim.sort((a, b) => (b.projectedTotal ?? b.baseTotal ?? 0) - (a.projectedTotal ?? a.baseTotal ?? 0))
+  sim.forEach((r, i) => { r.rank = i + 1; r.moved = officialRank.get(r.name) !== r.rank })
+
+  return {
+    round,
+    roundDate: ROUND_DATES[round] ?? null,
+    captainPlayerId,
+    captainName,
+    tripleCaptain: liveRound?.tripleCaptain ?? false,
+    multiplier,
+    rows,
+    live: {
+      startersEntered, startersTotal: starterRows.length,
+      startersPoints, captainBonus, benchPoints, liveRoundPoints,
+      baseTotal, projectedTotal: baseTotal + liveRoundPoints, lastUpdate,
+    },
+    standings: sim,
+  }
+}
+
+export interface LiveSaveInput {
+  tripleCaptain?: boolean
+  captainPlayerId?: string | null
+  entries?: { playerId: string; points: number | null; note?: string }[]
+}
+
+export async function saveLive(round: number, input: LiveSaveInput): Promise<LiveView> {
+  if (!Number.isInteger(round) || round < 1 || round > 38) throw new Error('Journée invalide')
+  const now = new Date().toISOString()
+
+  // État de la journée (capitaine / token)
+  await db.liveRound.upsert({
+    where: { round },
+    update: {
+      captainPlayerId: input.captainPlayerId ?? undefined,
+      tripleCaptain: input.tripleCaptain ?? undefined,
+      updatedAt: now,
+    },
+    create: {
+      round,
+      captainPlayerId: input.captainPlayerId ?? null,
+      tripleCaptain: input.tripleCaptain ?? false,
+      updatedAt: now,
+    },
+  })
+
+  // Saisies de points
+  for (const e of input.entries ?? []) {
+    const data = { round, playerId: e.playerId, points: e.points, note: e.note ?? null, updatedAt: now }
+    await db.liveEntry.upsert({
+      where: { round_playerId: { round, playerId: e.playerId } },
+      update: { points: e.points, note: e.note ?? null, updatedAt: now },
+      create: data,
+    })
+  }
+
+  // Journal : 1 événement max / 10 min par journée (évite le spam d'autosave)
+  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+  const recent = await db.dataEvent.findFirst({
+    where: { kind: 'SAISIE', detail: { contains: `R${round} ·` }, at: { gte: tenMinAgo } },
+  })
+  if (!recent) {
+    await db.dataEvent.create({
+      data: {
+        at: now,
+        kind: 'SAISIE',
+        title: 'Saisie live — Match Center',
+        detail: `R${round} · points recopiés depuis l'app Sofascore par l'utilisateur pendant ou après les matchs (canal temps réel V1).`,
+      },
+    })
+  }
+
+  return getLive(round)
+}
+
+export async function resetLive(round: number): Promise<void> {
+  await db.liveEntry.deleteMany({ where: { round } })
+  await db.liveRound.deleteMany({ where: { round } })
+  await db.dataEvent.create({
+    data: {
+      at: new Date().toISOString(),
+      kind: 'SAISIE',
+      title: 'Saisie live réinitialisée',
+      detail: `R${round} · saisies live effacées (nouvelle journée ou correction).`,
+    },
+  })
+}
+
 // ── Vue d'ensemble ────────────────────────────────────────────
 export async function getOverview(): Promise<Overview> {
   const [league, team, captains, alerts] = await Promise.all([getLeague(), getTeam(), getCaptainPicks(), getAlerts()])
@@ -354,6 +499,23 @@ export async function getAssistantContext(): Promise<string> {
   const [league, team, captains, flags, targets, alerts, fixtures] = await Promise.all([
     getLeague(), getTeam(), getCaptainPicks(), getTransferFlags(), getMarketTargets(), getAlerts(), getFixtures(),
   ])
+  // Bloc live : dernières saisies du Match Center (si une journée live est active)
+  const activeLive = await db.liveEntry.findFirst({ orderBy: { updatedAt: 'desc' } })
+  let liveBlock = ''
+  if (activeLive) {
+    const lv = await getLive(activeLive.round)
+    const scored = lv.rows.filter((r) => r.points != null && r.role === 'TITULAIRE')
+    const pending = lv.rows.filter((r) => r.points == null && r.role === 'TITULAIRE')
+    liveBlock = `
+JOURNÉE LIVE (R${lv.round}${lv.roundDate ? `, ${lv.roundDate}` : ''}) — saisies Match Center :
+- Score live de la journée : ${lv.live.liveRoundPoints} pts (titulaires ${lv.live.startersPoints} + bonus capitaine ${lv.live.captainBonus}, ×${lv.multiplier}${lv.captainName ? ` sur ${lv.captainName}` : ''})
+- Total projeté : ${lv.live.projectedTotal} pts (base archivée ${lv.live.baseTotal})
+- Classement simulé : ${lv.standings.map((s) => `${s.rank}. ${s.name} ${s.projectedTotal ?? '?'}${s.moved ? ' (position live)' : ''}`).join(' | ')}
+- Déjà saisis : ${scored.map((r) => `${r.name} ${r.points}`).join(', ') || 'aucun'}
+- En attente : ${pending.map((r) => r.name).join(', ') || 'aucun'}
+(les rivaux sont figés à leur dernier total capturé — pas de live possible sur leurs équipes)
+`
+  }
   const xi = team.starters
     .map((p) => {
       const pts = p.pointsR4 != null ? `${p.pointsR4} pts` : `points incomplets (${p.pointsNote ?? 'match non joué à la capture'})`
@@ -378,7 +540,7 @@ export async function getAssistantContext(): Promise<string> {
   return `Tu es le coach fantasy personnel de l'utilisateur (équipe VITAL_GDB) dans sa VRAIE ligue privée Sofascore Fantasy Premier League 2026/27 « Le fond de la classe » (5 gestionnaires). Toutes les données ci-dessous sont RÉELLES et sourcées (captures de son app Sofascore du 13/09/2026 + articles officiels Sofascore).
 
 RÈGLES EN VIGUEUR (officielles 2026/27) : budget 100 M€, 15 joueurs (2G/5D/5M/3A), 2 transferts gratuits/journée (cumul max 5, au-delà −5 pts), capitaine ×2, tokens : Triple Captain ×3 (1/saison), Quick Fix (2/saison), Rebuild Squad (2/saison, 1 par mi-saison), max 1 token/journée. Scoring : ratings Sofascore + 30+ catégories.
-
+${liveBlock}
 CLASSEMENT RÉEL après R4 :
 ${classement}
 Moyenne R4 affichée dans l'app : 64,1 · meilleur score affiché : 141 (probablement global, à confirmer).

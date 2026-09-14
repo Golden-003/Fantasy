@@ -67,6 +67,7 @@ model Player {
   priceSource String?
   formNote    String? // mention de forme issue de l'article officiel
   slots       SquadSlot[]
+  liveEntries LiveEntry[]
 }
 
 // Effectif réel de Vital_GDB (capture 13 sept 21:45)
@@ -98,7 +99,36 @@ model Fixture {
 model DataEvent {
   id     String @id @default(cuid())
   at     String // ISO
-  kind   String // CAPTURE | ARTICLE | REGLE | SAISON
+  kind   String // CAPTURE | ARTICLE | REGLE | SAISON | SAISIE
   title  String
   detail String
+}
+
+// ─────────────────────────────────────────────────────────────────
+// MISE À JOUR TEMPS RÉEL (canal live)
+// L'app Sofascore sur le téléphone de l'utilisateur reste la source
+// des notes live ; il les recopie ici en ~30 s après chaque match
+// (ou à la mi-temps) → le coach recalcule instantanément :
+// score live, bonus capitaine, classement simulé de la ligue.
+// ─────────────────────────────────────────────────────────────────
+
+// Saisie live d'un joueur pour une journée donnée
+model LiveEntry {
+  id        String  @id @default(cuid())
+  round     Int
+  playerId  String
+  points    Int? // null = pas encore saisi pour cette journée
+  note      String? // ex: « après le match », « mi-temps »
+  updatedAt String // ISO — horodatage de la dernière saisie
+  player    Player  @relation(fields: [playerId], references: [id])
+
+  @@unique([round, playerId])
+}
+
+// État de la journée live : capitaine choisi + token éventuel
+model LiveRound {
+  round         Int     @id
+  captainPlayerId String? // capitaine pour cette journée
+  tripleCaptain Boolean @default(false) // token Triple Captain (×3) activé
+  updatedAt     String
 }

@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import DashboardTab from '@/components/coach/DashboardTab'
+import LiveTab from '@/components/coach/LiveTab'
 import TeamTab from '@/components/coach/TeamTab'
 import LeagueTab from '@/components/coach/LeagueTab'
 import PlayersTab from '@/components/coach/PlayersTab'
@@ -12,6 +13,7 @@ import { BadgeCheck } from 'lucide-react'
 
 const TABS = [
   { key: 'accueil', label: 'Accueil' },
+  { key: 'live', label: 'Live' },
   { key: 'equipe', label: 'Mon Équipe' },
   { key: 'ligue', label: 'Ligue' },
   { key: 'marche', label: 'Marché' },
@@ -62,6 +64,7 @@ export default function Home() {
       {/* Contenu */}
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-4 pb-16">
         {tab === 'accueil' && <DashboardTab onGoAssistant={() => setTab('assistant')} />}
+        {tab === 'live' && <LiveTab />}
         {tab === 'equipe' && <TeamTab />}
         {tab === 'ligue' && <LeagueTab />}
         {tab === 'marche' && <PlayersTab />}

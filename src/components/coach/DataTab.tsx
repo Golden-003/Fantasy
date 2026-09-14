@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { RULES, SOURCES } from '@/lib/coach/rules'
-import { Camera, Database, FileText, ScrollText, Scale } from 'lucide-react'
+import { Camera, Database, FileText, PencilLine, Radio, ScrollText, Scale, WifiOff } from 'lucide-react'
 
 interface DataEvent {
   id: string
@@ -19,6 +19,7 @@ const KIND_STYLE: Record<string, { icon: typeof FileText; cls: string }> = {
   ARTICLE: { icon: FileText, cls: 'text-emerald-300 border-emerald-500/30 bg-emerald-500/5' },
   REGLE: { icon: Scale, cls: 'text-amber-300 border-amber-500/30 bg-amber-500/5' },
   SAISON: { icon: ScrollText, cls: 'text-sky-300 border-sky-500/30 bg-sky-500/5' },
+  SAISIE: { icon: PencilLine, cls: 'text-rose-300 border-rose-500/30 bg-rose-500/5' },
 }
 
 export default function DataTab() {
@@ -57,6 +58,39 @@ export default function DataTab() {
               <p className="text-[10px] uppercase tracking-wide text-zinc-500">{s.label}</p>
             </div>
           ))}
+        </CardContent>
+      </Card>
+
+      <Card className="border-rose-500/25 bg-rose-500/5">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Radio className="h-4 w-4 text-rose-300" /> Comment les stats se mettent à jour — 3 canaux, 3 vitesses
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3">
+            <p className="font-semibold text-rose-200">① PENDANT les matchs — Match Center (onglet Live)</p>
+            <p className="mt-1 text-[13px] leading-relaxed text-zinc-300">
+              L’app Sofascore sur ton téléphone est la seule source live (Cloudflare interdit aux serveurs d’y accéder).
+              Tu recopies les notes de tes joueurs dans le Match Center en ~30 s après chaque match :
+              score live, bonus capitaine (×2 / token ×3) et classement simulé se recalculent instantanément.
+            </p>
+          </div>
+          <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
+            <p className="font-semibold text-violet-200">② APRÈS la journée — le rituel des captures (chat)</p>
+            <p className="mt-1 text-[13px] leading-relaxed text-zinc-300">
+              Tu m’envoies les captures A (ton équipe), B (classement de la ligue) et C (XI des rivaux si visible).
+              Je les lis, je les archive dans la base avec leur source, et tout le moteur (formes, tendances, alertes)
+              se met à jour avec les données officielles confirmées.
+            </p>
+          </div>
+          <div className="rounded-lg border border-border bg-zinc-900/40 p-3">
+            <p className="flex items-center gap-1.5 font-semibold text-zinc-200"><WifiOff className="h-3.5 w-3.5" /> V2 — connecteur local (automatique)</p>
+            <p className="mt-1 text-[13px] leading-relaxed text-zinc-300">
+              Ton navigateur, lui, passe le Cloudflare (c’est ta session). Un petit connecteur installé chez toi
+              pourra synchroniser Sofascore automatiquement — zéro capture, zéro saisie. La V1 fonctionne sans lui.
+            </p>
+          </div>
         </CardContent>
       </Card>
 

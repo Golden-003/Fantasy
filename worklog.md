@@ -143,3 +143,26 @@ Stage Summary:
 - Fichiers clés: prisma/schema.prisma, scripts/seed-sofascore.ts, src/lib/coach/{rules,types,engine}.ts, src/app/api/coach/**, src/components/coach/**, src/app/page.tsx
 - Base: db/custom.db (24 joueurs, 25 fixtures, 5 managers, 8 scores) — relancer `bun scripts/seed-sofascore.ts` pour régénérer
 - Pipeline V1: captures utilisateur → seed/journal → moteur sourcé → assistant IA ; les captures rivaux (Captures C) enrichiront la War Room
+
+---
+Task ID: 6
+Agent: Main agent (Super Z)
+Task: Réponse à « comment tu assures la mise à jour en temps réel des statistiques » → implémentation du canal LIVE (Match Center) dans la V1
+
+Work Log:
+- Architecture de mise à jour formalisée en 3 canaux : ① Live pendant les matchs (Match Center, saisie ~30 s depuis l'app Sofascore du téléphone = source live légitime) · ② captures chat après la journée (rituel A/B/C existant) · ③ V2 connecteur local (le navigateur de l'utilisateur passe Cloudflare, pas nos serveurs)
+- Schéma Prisma : nouveaux modèles LiveEntry (points saisis par joueur/journée, horodatés, upsert) et LiveRound (capitaine de la journée + token Triple Captain) ; relation Player.liveEntries ; db push OK
+- Moteur (engine.ts) : getLive(round) — calcule score live (titulaires + bonus capitaine ×2/×3), banc informatif, total projeté (base archivée 284 + live) et CLASSEMENT SIMULÉ (rivaux figés à leurs totaux capturés, badge « position live » si changement de rang) ; saveLive(round, input) avec upserts + journal DataEvent SAISIE dédupliqué (max 1/10 min/journée) ; resetLive(round) ; LIVE_DEFAULT_ROUND = 5
+- Assistant IA : nouveau bloc JOURNÉE LIVE injecté dans le contexte quand des saisies existent (score live, projeté, classement simulé, saisis/en attente)
+- API /api/coach/live : GET ?round / POST {round, entries[], captainPlayerId, tripleCaptain} / DELETE ?round avec validation 1-38
+- UI LiveTab (nouvel onglet « Live » en 2e position) : bandeau rituel 30 s, sélecteur R5-R8 avec flush de sauvegarde au changement de journée, résumé live 3 tuiles (pts journée / total projeté / base), token Triple Captain activable, saisie points par joueur (inputs numériques, autosave débouncé 800 ms / 400 ms capitaine-token), titulaires avec bouton capitaine « C » (banc sans C), classement simulé avec badges, reset avec confirmation AlertDialog
+- BUG CORRIGÉ (détecté par test E2E) : closure périmée — le setTimeout d'autosave capturait l'ancien état captain/null → capitaine perdu au reload (36→18 pts). Fix : refs synchronisées (draftRef, captainRef, tcRef, roundRef, viewRef) + sync immédiat dans pickCaptain/toggleToken + persist lit les refs au moment de l'appel + garde roundRef.current === targetRound avant setView
+- BUG POTENTIEL évité : changement de journée avec saisies non sauvegardées → flush persist(roundRef) avant setRound (pas de contamination R5→R6)
+- Stale Prisma client après db push (db.liveEntry undefined) → redémarrage du serveur dev (procédure connue)
+- Vérification navigateur complète : saisie 18 pts Haaland + capitaine → 36 pts live / 320 projeté instantané ; token ×3 → 54 / 338 → Vital_GDB dépasse nik Leroy (333) au classement simulé ; persistance validée après reload (18 + C + 36) ; reset R5 OK ; onglet Données avec carte « 3 canaux, 3 vitesses » ; assistant toujours ancré réel (Haaland vs Sunderland FACILE, 21,5 moteur) ; mobile 390 px propre ; lint ✅ ; aucune erreur console/serveur
+
+Stage Summary:
+- La question temps réel a une réponse logicielle concrète : onglet « Live » (Match Center) — Sofascore reste la source live légitime (téléphone de l'utilisateur), le coach recalcule tout en <1 s après chaque saisie de ~30 s
+- Fichiers : prisma/schema.prisma (+LiveEntry, +LiveRound), src/lib/coach/{types,engine}.ts, src/app/api/coach/live/route.ts, src/components/coach/LiveTab.tsx, src/app/page.tsx (onglet), src/components/coach/DataTab.tsx (3 canaux)
+- Règle d'or respectée : zéro donnée inventée — les points live viennent de l'utilisateur (source = son app), les rivaux restent « figés aux captures » et le sont explicitement dans l'UI
+- Prochaines étapes possibles : V2 connecteur local (auto-sync depuis son navigateur), Captures C rivaux → War Room

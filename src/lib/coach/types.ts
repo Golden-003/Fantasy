@@ -126,3 +126,51 @@ export interface Overview {
     dataEvents: number
   }
 }
+
+// ── Temps réel (Match Center live) ─────────────────────────────
+
+export interface LivePlayerRow {
+  playerId: string
+  name: string
+  club: string
+  clubConfirmed: boolean
+  position: Pos
+  role: 'TITULAIRE' | 'BANC'
+  fixture: string | null
+  pointsR4: number | null
+  // état live
+  points: number | null
+  updatedAt: string | null
+}
+
+export interface LiveStandingRow {
+  name: string
+  isUser: boolean
+  baseTotal: number | null // total archivé (ex: après R4)
+  liveRoundPoints: number | null // points live de la journée (utilisateur seulement)
+  projectedTotal: number | null // base + live pour l'utilisateur
+  rank: number
+  moved: boolean // position changeante grâce au live
+}
+
+export interface LiveView {
+  round: number
+  roundDate: string | null
+  captainPlayerId: string | null
+  captainName: string | null
+  tripleCaptain: boolean
+  multiplier: 2 | 3
+  rows: LivePlayerRow[]
+  live: {
+    startersEntered: number
+    startersTotal: number
+    startersPoints: number // somme brute des titulaires saisis
+    captainBonus: number // bonus capitaine (multiplier-1) × points du capitaine saisis
+    benchPoints: number // info : banc saisi (remplacements appliqués par le jeu à la clôture)
+    liveRoundPoints: number // total live de la journée (titulaires + bonus capitaine)
+    baseTotal: number // total archivé (ex: 284 après R4)
+    projectedTotal: number // base + live
+    lastUpdate: string | null
+  }
+  standings: LiveStandingRow[]
+}
