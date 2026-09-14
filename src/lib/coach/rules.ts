@@ -16,5 +16,5 @@ export const RULES = {
   maxOneTokenPerRound: true,
 }
 
-// Les dates de journées sont lues dynamiquement depuis les fixtures (kickoff).
-export const CURRENT_ROUND = 5
+// Les dates et le numéro de journée courante sont lus dynamiquement
+// depuis la base (SyncState + fixtures kickoff) côté serveur.

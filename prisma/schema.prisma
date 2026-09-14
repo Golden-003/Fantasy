@@ -82,6 +82,7 @@ model Player {
   epNext      Float? // projection points prochaine journée
   priceRef    Float? // prix de référence (£M)
   ownershipRef Float? // % détention de référence
+  fplId       Int?    @unique // ID officiel FPL — clé de synchronisation
   source      String  @default("FPL")
   slots       SquadSlot[]
   liveEntries LiveEntry[]
@@ -120,20 +121,29 @@ model Transfer {
   inPlayer    Player? @relation("transfersIn", fields: [inPlayerId], references: [id])
 }
 
-// Calendrier complet de la saison (380 matches, API officielle)
+// Calendrier complet de la saison (760 lignes = 380 matches × 2 côtés)
+// une ligne par club : domicile ET extérieur — chaque joueur retrouve son match
 model Fixture {
-  id       String @id @default(cuid())
-  round    Int
-  club     String
-  opponent String
-  isHome   Boolean
-  kickoff  String? // date/heure du match (ISO)
-  source   String
+  id         String @id @default(cuid())
+  round      Int
+  club       String
+  opponent   String
+  isHome     Boolean
+  kickoff    String? // date/heure du match (ISO)
+  difficulty Int? // 1-5 (officiel côté domicile, dérivé côté extérieur)
+  source     String
 
   @@unique([round, club])
 }
 
-// Journal d'ingestion : traçabilité complète des données réelles
+// État de synchronisation (dernière mise à jour, journée courante)
+model SyncState {
+  key    String  @id // "currentRound" | "lastSync"
+  value  String
+  at     String? // ISO pour lastSync
+}
+
+// Journal d'ingestion
 model DataEvent {
   id     String @id @default(cuid())
   at     String // ISO

@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DiffBadge } from '@/components/coach/ui-helpers'
 import type { Overview } from '@/lib/coach/types'
 import {
-  AlertTriangle, ArrowUpRight, CalendarDays, Crown, Flame, Info, ShieldAlert, Shirt, TrendingUp, Users,
+  AlertTriangle, ArrowUpRight, CalendarDays, Crown, Flame, Info, Loader2, RefreshCw, ShieldAlert, Shirt, TrendingUp, Users,
 } from 'lucide-react'
 
 const LEVEL_ICON = {
@@ -17,13 +17,36 @@ const LEVEL_ICON = {
 
 export default function DashboardTab({ onGoTeam }: { onGoTeam: () => void }) {
   const [ov, setOv] = useState<Overview | null>(null)
+  const [syncing, setSyncing] = useState(false)
+  const [lastSync, setLastSync] = useState<string | null>(null)
 
-  useEffect(() => {
+  const load = useCallback(() => {
     fetch('/api/coach/overview')
       .then((r) => r.json())
       .then((d) => setOv(d.error ? null : d))
       .catch(() => setOv(null))
+    fetch('/api/sync')
+      .then((r) => r.json())
+      .then((d) => setLastSync(d.lastAt ?? null))
+      .catch(() => setLastSync(null))
   }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  async function refresh() {
+    if (syncing) return
+    setSyncing(true)
+    try {
+      await fetch('/api/sync', { method: 'POST' })
+      load()
+    } catch {
+      /* silencieux */
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   if (!ov) {
     return (
@@ -136,13 +159,21 @@ export default function DashboardTab({ onGoTeam }: { onGoTeam: () => void }) {
 
       {/* Base de données */}
       <Card>
-        <CardContent className="flex items-center gap-4 p-4 text-sm text-slate-600">
+        <CardContent className="flex flex-wrap items-center gap-3 p-4 text-sm text-slate-600">
           <Users className="h-4 w-4 shrink-0 text-slate-400" />
           <p>
-            <b className="tabular-nums text-slate-900">{ov.playerCount}</b> joueurs de Premier League suivis ·{' '}
-            <b className="tabular-nums text-slate-900">{ov.fixtureCount}</b> matchs du calendrier
+            <b className="tabular-nums text-slate-900">{ov.playerCount}</b> joueurs de Premier League ·{' '}
+            <b className="tabular-nums text-slate-900">{ov.fixtureCount}</b> lignes calendrier
+            {lastSync && <span className="text-xs text-slate-400"> · maj {new Date(lastSync).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>}
           </p>
-          <TrendingUp className="ml-auto h-4 w-4 shrink-0 text-slate-300" />
+          <button
+            onClick={refresh}
+            disabled={syncing}
+            className="ml-auto flex items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+          >
+            {syncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            Actualiser
+          </button>
         </CardContent>
       </Card>
     </div>

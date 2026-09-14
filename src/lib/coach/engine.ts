@@ -30,12 +30,12 @@ export const RULES = {
   maxOneTokenPerRound: true,
 }
 
-// Clubs promus 2026/27 · clubs forts (pour l'heuristique de difficulté)
-// Noms selon la source officielle des fixtures
+// Repli si aucune difficulté stockée (anciennes lignes)
 const PROMOTED = new Set(['Leeds', 'Hull City', 'Coventry City'])
 const STRONG = new Set(['Arsenal', 'Man City', 'Liverpool', 'Chelsea', 'Newcastle'])
 
-function fixtureDifficulty(_club: string, opponent: string, isHome: boolean): Difficulty {
+export function difficultyFromLevel(level: number | null | undefined, opponent: string, isHome: boolean): Difficulty {
+  if (level != null) return level <= 2 ? 'FACILE' : level <= 3 ? 'MOYEN' : 'DIFFICILE'
   let ease = 0
   if (isHome) ease += 1
   if (PROMOTED.has(opponent)) ease += 1.5
@@ -43,12 +43,32 @@ function fixtureDifficulty(_club: string, opponent: string, isHome: boolean): Di
   return ease >= 1.2 ? 'FACILE' : ease >= 0.2 ? 'MOYEN' : 'DIFFICILE'
 }
 
+const levelOf = (d: Difficulty) => (d === 'FACILE' ? 1 : d === 'MOYEN' ? 3 : 5)
+
 const fixtureLabel = (f: { opponent: string; isHome: boolean }) => `${f.isHome ? 'vs' : '@'} ${f.opponent}`
 
-const easeBonus = (d: Difficulty) => (d === 'FACILE' ? 2 : d === 'MOYEN' ? 1 : 0)
+export const easeBonus = (d: Difficulty) => (d === 'FACILE' ? 2 : d === 'MOYEN' ? 1 : 0)
 
 // ── Helpers ────────────────────────────────────────────────────
-const CURRENT_ROUND = 5 // journée à venir (après clôture R4)
+// Journée courante : SyncState (posée par le sync) → calcul sur kickoffs → 5.
+// Cache 60 s pour éviter les allers-retours DB dans une même requête.
+let roundCache: { value: number; at: number } | null = null
+
+export async function getCurrentRound(): Promise<number> {
+  if (roundCache && Date.now() - roundCache.at < 60_000) return roundCache.value
+  const row = await db.syncState.findUnique({ where: { key: 'currentRound' } })
+  let v = row ? parseInt(row.value) : NaN
+  if (!Number.isInteger(v) || v < 1 || v > 38) {
+    const now = new Date().toISOString()
+    const fx = await db.fixture.findFirst({
+      where: { kickoff: { gte: now } },
+      orderBy: [{ round: 'asc' }, { kickoff: 'asc' }],
+    })
+    v = fx?.round ?? 5
+  }
+  roundCache = { value: v, at: Date.now() }
+  return v
+}
 
 export async function getRoundDate(round: number): Promise<string | null> {
   const fx = await db.fixture.findFirst({ where: { round }, orderBy: { kickoff: 'asc' } })
@@ -62,6 +82,7 @@ function statusOf(p: { status: string }): PlayerStatus {
 
 // ── Effectif d'un manager (généralisé) ─────────────────────────
 export async function getTeam(managerSlug = 'vital_gdb'): Promise<TeamView> {
+  const CURRENT_ROUND = await getCurrentRound()
   const manager = await db.manager.findUnique({
     where: { slug: managerSlug },
     include: { squads: { include: { player: true } } },
@@ -92,7 +113,7 @@ export async function getTeam(managerSlug = 'vital_gdb'): Promise<TeamView> {
       minutes: p.minutes,
       epNext: p.epNext,
       fixtureNext: fx
-        ? { opponent: fx.opponent, isHome: fx.isHome, difficulty: fixtureDifficulty(fx.club, fx.opponent, fx.isHome), kickoff: fx.kickoff }
+        ? { opponent: fx.opponent, isHome: fx.isHome, difficulty: difficultyFromLevel(fx.difficulty, fx.opponent, fx.isHome), kickoff: fx.kickoff }
         : null,
       round: fx?.round ?? CURRENT_ROUND,
     }
@@ -151,6 +172,7 @@ export async function getPlayersAll(): Promise<PlayerRow[]> {
 }
 
 export async function getPlayerDetail(id: string): Promise<PlayerDetail | null> {
+  const CURRENT_ROUND = await getCurrentRound()
   const p = await db.player.findUnique({ where: { id } })
   if (!p) return null
   const fixtures = await db.fixture.findMany({
@@ -167,7 +189,7 @@ export async function getPlayerDetail(id: string): Promise<PlayerDetail | null> 
     news: p.news, xg: p.xg, xa: p.xa, source: p.source,
     fixturesDetailed: fixtures.map((f) => ({
       round: f.round, opponent: f.opponent, isHome: f.isHome,
-      difficulty: fixtureDifficulty(f.club, f.opponent, f.isHome), kickoff: f.kickoff,
+      difficulty: difficultyFromLevel(f.difficulty, f.opponent, f.isHome), kickoff: f.kickoff,
     })),
   } as PlayerDetail
 }
@@ -230,6 +252,7 @@ export async function getTransferFlags(team?: TeamView): Promise<TransferFlag[]>
 
 // ── Cibles marché — meilleures projections hors effectif ──────
 export async function getMarketTargets(team?: TeamView): Promise<MarketTarget[]> {
+  const CURRENT_ROUND = await getCurrentRound()
   const t = team ?? (await getTeam())
   const squadIds = new Set([...t.starters, ...t.bench].map((p) => p.id))
   const players = await db.player.findMany({
@@ -241,7 +264,7 @@ export async function getMarketTargets(team?: TeamView): Promise<MarketTarget[]>
   const fixMap = new Map(fixtures.map((f) => [f.club, f]))
   const targets: MarketTarget[] = players.map((p) => {
     const fx = fixMap.get(p.club)
-    const dif = fx ? fixtureDifficulty(fx.club, fx.opponent, fx.isHome) : 'MOYEN'
+    const dif = fx ? difficultyFromLevel(fx.difficulty, fx.opponent, fx.isHome) : 'MOYEN'
     return {
       playerId: p.id, name: p.name, club: p.club, position: p.position as Pos,
       price: p.price, priceRef: p.priceRef, epNext: p.epNext, form: p.form,
@@ -258,7 +281,7 @@ export async function getMarketTargets(team?: TeamView): Promise<MarketTarget[]>
 
 // ── Alertes dynamiques ─────────────────────────────────────────
 export async function getAlerts(): Promise<Alert[]> {
-  const [league, team] = await Promise.all([getLeague(), getTeam()])
+  const [league, team, CURRENT_ROUND] = await Promise.all([getLeague(), getTeam(), getCurrentRound()])
   const alerts: Alert[] = []
 
   if (league.gapToLeader < 0) {
@@ -306,7 +329,7 @@ export async function getAlerts(): Promise<Alert[]> {
 
 // ── Ligue ──────────────────────────────────────────────────────
 export async function getLeague(): Promise<LeagueView> {
-  const managers = await db.manager.findMany({ orderBy: { sortOrder: 'asc' }, include: { scores: true } })
+  const [managers, CURRENT_ROUND] = await Promise.all([db.manager.findMany({ orderBy: { sortOrder: 'asc' }, include: { scores: true } }), getCurrentRound()])
   const rows: StandingRow[] = managers.map((m) => {
     const known = m.scores.filter((s) => s.points != null).sort((a, b) => a.round - b.round)
     const latestTotal = [...m.scores].filter((s) => s.totalAfter != null).sort((a, b) => b.round - a.round)[0]?.totalAfter ?? null
@@ -354,34 +377,36 @@ export async function getManagerDetail(slug: string): Promise<ManagerDetail | nu
 }
 
 // ── Fixtures ───────────────────────────────────────────────────
-export async function getFixtures(from = CURRENT_ROUND, to = CURRENT_ROUND + 3, club?: string): Promise<{ rounds: Record<number, FixtureView[]> }> {
+export async function getFixtures(from?: number, to?: number, club?: string): Promise<{ rounds: Record<number, FixtureView[]> }> {
+  const CURRENT_ROUND = await getCurrentRound()
+  const f = from ?? CURRENT_ROUND
+  const t = to ?? CURRENT_ROUND + 3
   const fixtures = await db.fixture.findMany({
-    where: { round: { gte: from, lte: to }, ...(club ? { club } : {}) },
+    where: { round: { gte: f, lte: t }, ...(club ? { club } : {}) },
     orderBy: [{ round: 'asc' }, { club: 'asc' }],
   })
   const rounds: Record<number, FixtureView[]> = {}
-  for (const f of fixtures) {
-    const arr = (rounds[f.round] ??= [])
-    arr.push({ round: f.round, club: f.club, opponent: f.opponent, isHome: f.isHome, difficulty: fixtureDifficulty(f.club, f.opponent, f.isHome), kickoff: f.kickoff })
+  for (const fx of fixtures) {
+    const arr = (rounds[fx.round] ??= [])
+    arr.push({ round: fx.round, club: fx.club, opponent: fx.opponent, isHome: fx.isHome, difficulty: difficultyFromLevel(fx.difficulty, fx.opponent, fx.isHome), kickoff: fx.kickoff })
   }
   return { rounds }
 }
 
 // ── TEMPS RÉEL — Match Center live ────────────────────────────
-export const LIVE_DEFAULT_ROUND = CURRENT_ROUND
-
-export async function getLive(round: number): Promise<LiveView> {
+export async function getLive(round?: number): Promise<LiveView> {
+  const r = round ?? (await getCurrentRound())
   const [team, entries, liveRound, league] = await Promise.all([
     getTeam(),
-    db.liveEntry.findMany({ where: { round }, include: { player: true } }),
-    db.liveRound.findUnique({ where: { round } }),
+    db.liveEntry.findMany({ where: { round: r }, include: { player: true } }),
+    db.liveRound.findUnique({ where: { round: r } }),
     getLeague(),
   ])
 
   const entryByPlayer = new Map(entries.map((e) => [e.playerId, e]))
   const rowOf = (p: SquadPlayerView): LivePlayerRow => {
     const e = entryByPlayer.get(p.id)
-    const fx = p.fixtureNext && p.round === round ? `${p.fixtureNext.isHome ? 'vs' : '@'} ${p.fixtureNext.opponent}` : null
+    const fx = p.fixtureNext && p.round === r ? `${p.fixtureNext.isHome ? 'vs' : '@'} ${p.fixtureNext.opponent}` : null
     return {
       playerId: p.id, name: p.name, club: p.club,
       position: p.position, role: p.role, fixture: fx, pointsR4: p.pointsR4,
@@ -422,8 +447,8 @@ export async function getLive(round: number): Promise<LiveView> {
   sim.forEach((r, i) => { r.rank = i + 1; r.moved = officialRank.get(r.name) !== r.rank })
 
   return {
-    round,
-    roundDate: await getRoundDate(round),
+    round: r,
+    roundDate: await getRoundDate(r),
     captainPlayerId,
     captainName,
     tripleCaptain: liveRound?.tripleCaptain ?? false,
@@ -509,7 +534,7 @@ export async function saveSquad(managerId: string, slots: SquadSlotInput[]): Pro
 
   await db.$transaction(async (tx) => {
     await tx.squadSlot.deleteMany({ where: { managerId } })
-    const round = CURRENT_ROUND - 1
+    const round = (await getCurrentRound()) - 1
     for (const s of slots) {
       const p = pMap.get(s.playerId)!
       await tx.squadSlot.create({
@@ -564,7 +589,7 @@ export async function saveTransfer(input: TransferInput): Promise<void> {
         await tx.squadSlot.create({
           data: {
             managerId, playerId: inPlayerId, role: 'BANC', slotPosition: inPlayer.position,
-            captain: false, round: CURRENT_ROUND - 1,
+            captain: false, round: (await getCurrentRound()) - 1,
           },
         })
       }
@@ -599,7 +624,7 @@ export async function saveRoundScore(managerId: string, round: number, points: n
 // ── Vue d'ensemble ────────────────────────────────────────────
 export async function getOverview(): Promise<Overview> {
   const [league, team, captains, alerts] = await Promise.all([getLeague(), getTeam(), getCaptainPicks(), getAlerts()])
-  const [playerCount, fixtureCount] = await Promise.all([db.player.count(), db.fixture.count()])
+  const [playerCount, fixtureCount, CURRENT_ROUND] = await Promise.all([db.player.count(), db.fixture.count(), getCurrentRound()])
   return {
     leagueName: league.name,
     season: league.season,
@@ -616,90 +641,4 @@ export async function getOverview(): Promise<Overview> {
     playerCount,
     fixtureCount,
   }
-}
-
-// ── Contexte de l'assistant IA ─────────────────────────────────
-export async function getAssistantContext(): Promise<string> {
-  const [league, team, captains, flags, targets, alerts] = await Promise.all([
-    getLeague(), getTeam(), getCaptainPicks(), getTransferFlags(), getMarketTargets(), getAlerts(),
-  ])
-
-  let liveBlock = ''
-  const activeLive = await db.liveEntry.findFirst({ orderBy: { updatedAt: 'desc' } })
-  if (activeLive) {
-    const lv = await getLive(activeLive.round)
-    const scored = lv.rows.filter((r) => r.points != null && r.role === 'TITULAIRE')
-    liveBlock = `
-JOURNÉE EN COURS (J${lv.round}${lv.roundDate ? `, ${lv.roundDate}` : ''}) :
-- Score live : ${lv.live.liveRoundPoints} pts (titulaires ${lv.live.startersPoints} + bonus capitaine ${lv.live.captainBonus}, ×${lv.multiplier})
-- Total projeté : ${lv.live.projectedTotal} (base ${lv.live.baseTotal})
-- Classement projeté : ${lv.standings.map((s) => `${s.rank}. ${s.name} ${s.projectedTotal ?? '?'}`).join(' | ')}
-- Points déjà saisis : ${scored.map((r) => `${r.name} ${r.points}`).join(', ') || 'aucun'}
-`
-  }
-
-  // effectifs des rivaux connus
-  const managers = await db.manager.findMany({ include: { squads: { include: { player: true } } } })
-  const rivalsBlock = managers
-    .filter((m) => !m.isUser && m.squads.length > 0)
-    .map((m) => {
-      const xi = m.squads.filter((s) => s.role === 'TITULAIRE').map((s) => s.player.name).join(', ')
-      return `- ${m.name} : ${xi}`
-    })
-    .join('\n')
-
-  const xi = team.starters
-    .map((p) => {
-      const stats = [
-        p.form != null ? `forme ${p.form.toFixed(1).replace('.', ',')}` : null,
-        p.totalPoints != null ? `${p.totalPoints} pts` : null,
-        p.status !== 'DISPO' ? `STATUT: ${p.status}${p.news ? ` (${p.news})` : ''}` : null,
-        p.price != null ? `${p.price} M€` : p.priceRef != null ? `réf. ${p.priceRef} £M` : null,
-      ].filter(Boolean).join(', ')
-      const fx = p.fixtureNext ? `J${p.round} ${fixtureLabel(p.fixtureNext)} (${p.fixtureNext.difficulty})` : ''
-      return `- ${p.name} (${p.club}, ${p.position}; ${stats}) ${fx}${p.captain ? ' [C]' : ''}`
-    })
-    .join('\n')
-  const bench = team.bench.map((p) => `${p.name} (${p.club}, ${p.position})`).join(', ')
-  const classement = league.standings
-    .map((r) => `${r.rank}. ${r.name} — ${r.total ?? '?'} pts${r.lastPoints != null ? ` (dernière journée : ${r.lastPoints})` : ''}${r.isUser ? ' ← TOI' : ''}`)
-    .join('\n')
-  const cap = captains.slice(0, 4).map((c) => `${c.rank}. ${c.name} — ${c.fixture} — score ${c.score} (${c.reasons.join(' ; ')})`).join('\n')
-  const flagStr = flags.map((f) => `${f.kind} : ${f.name} — ${f.reason}`).join('\n')
-  const targetStr = targets.map((t) => `${t.name} (${t.club}, ${t.position}, ${t.epNext != null ? `proj. ${t.epNext.toFixed(1).replace('.', ',')}` : '—'}) — ${t.rationale}`).join('\n')
-  const nextFixtures = await getFixtures(CURRENT_ROUND, CURRENT_ROUND + 1)
-  const fixtureStr = Object.entries(nextFixtures.rounds)
-    .map(([r, arr]) => `J${r} : ${arr.filter((f) => team.starters.some((p) => p.club === f.club) || team.bench.some((p) => p.club === f.club)).map((f) => `${f.club} ${f.isHome ? 'vs' : '@'} ${f.opponent}`).join(' | ')}`)
-    .join('\n')
-
-  return `Tu es le coach fantasy personnel de l'utilisateur (équipe VITAL_GDB) dans sa ligue privée Sofascore Fantasy Premier League 2026/27 « Le fond de la classe » (5 gestionnaires).
-
-RÈGLES 2026/27 : budget 100 M€, 15 joueurs (2G/5D/5M/3A), 2 transferts gratuits/journée (cumul max 5, au-delà −5 pts), capitaine ×2, tokens : Triple Captain ×3 (1/saison), Quick Fix (2), Rebuild Squad (2), max 1 token/journée.
-${liveBlock}
-CLASSEMENT :
-${classement}
-
-TON EFFECTIF (formation ${team.formation}) :
-${xi}
-BANC : ${bench}
-
-FIXTURES À VENIR DE TES JOUEURS :
-${fixtureStr}
-
-SUGGESTIONS CAPITAINE J${CURRENT_ROUND} :
-${cap}
-
-VIGILANCE EFFECTIF :
-${flagStr}
-
-CIBLES MARCHÉ (meilleures projections) :
-${targetStr}
-
-EFFECTIFS RIVAUX CONNUS :
-${rivalsBlock || 'aucun effectif rival enregistré pour l’instant'}
-
-ALERTES :
-${alerts.map((a) => `- ${a.title} : ${a.detail}`).join('\n')}
-
-CONSIGNE : n'invente AUCUN chiffre. Si une donnée manque, dis-le simplement. Réponds en français, direct et actionnable (max ~180 mots), sans emoji. Donne toujours ta recommandation avec les raisons chiffrées.`
 }

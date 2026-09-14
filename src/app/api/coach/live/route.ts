@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getLive, resetLive, saveLive, type LiveSaveInput } from '@/lib/coach/engine'
+import { getLive, resetLive, saveLive, getCurrentRound, type LiveSaveInput } from '@/lib/coach/engine'
 
 export const dynamic = 'force-dynamic'
 
-// GET /api/coach/live?round=5 → état du Match Center
+// GET /api/coach/live?round=5 → état du Match Center (défaut = journée courante)
 export async function GET(req: NextRequest) {
   try {
-    const round = Number(req.nextUrl.searchParams.get('round') ?? 5)
+    const param = req.nextUrl.searchParams.get('round')
+    const round = param ? Number(param) : await getCurrentRound()
     if (!Number.isInteger(round) || round < 1 || round > 38) {
       return NextResponse.json({ error: 'Journée invalide (1-38)' }, { status: 400 })
     }

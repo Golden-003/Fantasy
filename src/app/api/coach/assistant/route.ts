@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
-import { getAssistantContext } from '@/lib/coach/engine'
+import { getAssistantContext } from '@/lib/coach/analysis'
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 30
 
 interface ChatMessage { role: 'user' | 'assistant'; content: string }
 
@@ -14,7 +15,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Message manquant' }, { status: 400 })
     }
 
-    // Contexte 100% données réelles (captures + articles officiels Sofascore)
+    // Contexte 100% construit depuis les données en base (moteur d'analyse)
     const context = await getAssistantContext()
 
     // Import dynamique : si le SDK n'est pas disponible/paramétrable
@@ -34,15 +35,32 @@ export async function POST(req: Request) {
     return NextResponse.json({ reply })
   } catch (e) {
     console.error('assistant error', e)
-    // Repli rule-based : toujours ancré sur les vraies données du moteur
+    // Repli rule-based : briefing chiffré par le moteur d'analyse, jamais inventé
     try {
-      const { getOverview, getCaptainPicks, getTransferFlags, getMarketTargets } = await import('@/lib/coach/engine')
-      const [ov, caps, flags, targets] = await Promise.all([getOverview(), getCaptainPicks(), getTransferFlags(), getMarketTargets()])
-      const cap = caps[0]
-      const flag = flags.find((f) => f.kind === 'SURVEILLER') ?? flags[0]
-      const target = targets[0]
-      const fallback = `⚠️ L'IA conversationnelle est momentanément indisponible — voici l'analyse du moteur (données réelles) :\n\n🧢 Capitaine R5 : ${cap ? `${cap.name} — ${cap.fixture} (${cap.reasons[0]})` : 'à confirmer'}\n${flag ? `👀 ${flag.kind} : ${flag.name} — ${flag.reason}\n` : ''}${target ? `🟢 Cible sourcée : ${target.name} (${target.club}, ${target.price} M€) — ${target.rationale}\n` : ''}📊 Tu es ${ov.myRank}ᵉ avec ${ov.myTotal} pts (écart leader : ${ov.gapToLeader}). Prochaine étape : R5 le ${ov.nextRoundDate}, 2 transferts gratuits.`
-      return NextResponse.json({ reply: fallback, fallback: true })
+      const { getAnalysis } = await import('@/lib/coach/analysis')
+      const a = await getAnalysis()
+      const fr = (n: number | null | undefined, d = 1) => (n == null ? '—' : n.toFixed(d).replace('.', ','))
+      const lines: string[] = [
+        `L'IA conversationnelle est momentanément indisponible — voici le briefing du moteur d'analyse :`,
+        '',
+        `Situation : ${a.league.myRank}${a.league.myRank === 1 ? 'er' : 'e'} avec ${a.league.myTotal ?? '?'} pts (écart leader : ${a.league.gapToLeader}, ${a.league.leaderName}).`,
+      ]
+      if (a.prediction) {
+        lines.push(
+          `Sélection prédite J${a.round} (${a.prediction.formation}) : projection ${fr(a.prediction.projectedLow)} à ${fr(a.prediction.projectedHigh)} pts.`,
+          `Capitaine recommandé : ${a.prediction.captain ? `${a.prediction.captain.name} (${a.prediction.captain.club}, proj. ${fr(a.prediction.captain.projected)} pt, ${a.prediction.captain.fixture})` : '—'}.`,
+        )
+      }
+      const cap2 = a.captainMatrix[1]
+      if (cap2) lines.push(`Alternative capitaine : ${cap2.name} (${cap2.club}) — ${cap2.reasons[0] ?? ''}.`)
+      if (a.transfers[0]) {
+        const t = a.transfers[0]
+        lines.push(`Transfert prioritaire : ${t.out.name} → ${t.in.name} (${t.in.club}), gain estimé ${fr(t.gain)} pt. Raison sortie : ${t.out.reasons[0]}.`)
+      }
+      const top = a.comparisons[0]
+      if (top) lines.push(`Rival le plus dangereux : ${top.name} — ${top.verdict}.`)
+      lines.push(`Dernière synchro des données : ${a.sync.lastAt ? new Date(a.sync.lastAt).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'jamais'}. Utilise le bouton Actualiser pour rafraîchir.`)
+      return NextResponse.json({ reply: lines.join('\n'), fallback: true })
     } catch {
       return NextResponse.json({ error: "L'assistant est indisponible" }, { status: 500 })
     }
