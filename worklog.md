@@ -166,3 +166,21 @@ Stage Summary:
 - Fichiers : prisma/schema.prisma (+LiveEntry, +LiveRound), src/lib/coach/{types,engine}.ts, src/app/api/coach/live/route.ts, src/components/coach/LiveTab.tsx, src/app/page.tsx (onglet), src/components/coach/DataTab.tsx (3 canaux)
 - Règle d'or respectée : zéro donnée inventée — les points live viennent de l'utilisateur (source = son app), les rivaux restent « figés aux captures » et le sont explicitement dans l'UI
 - Prochaines étapes possibles : V2 connecteur local (auto-sync depuis son navigateur), Captures C rivaux → War Room
+
+---
+Task ID: 7
+Agent: Main agent (Super Z)
+Task: Pousser le projet vers le repo GitHub de l'utilisateur avec son Personal Access Token
+
+Work Log:
+- Token ghp_4bLL...vO6D reçu dans le chat → validé via API GitHub (HTTP 200, scopes repo+workflow, compte Golden-003 / Goldinosaure)
+- Mystère « aura intime et dedco » résolu : ce sont ses repos existants AURA-Intime (privé) et Dedco/dedco-app-native ; le repo créé pour le projet est Golden-003/Fantasy (créé le 2026-09-14 13:08 UTC, vide, public, branche main)
+- Balayage sécurité pré-push : .env et db/*.db non suivis ✓, 141 fichiers trackés, aucun secret en dur (grep sk-/ghp_/api_key) ✓
+- git remote add origin + git push -u origin main → succès (nouvelle branche main, tracking configuré)
+- Vérification côté GitHub : commits présents (HEAD a6398cc « Securite: exclure .env... »), 141 fichiers dont LiveTab.tsx, engine.ts, schema.prisma, .gitignore, page.tsx ; 0 fichier sensible poussé
+- Le remote contient le token dans .git/config (fichier local jamais commité) ; URL du repo : https://github.com/Golden-003/Fantasy
+
+Stage Summary:
+- SAUVEGARDE GITHUB OPÉRATIONNELLE : le code complet du Fantasy Coach est sur https://github.com/Golden-003/Fantasy
+- Sécurité maintenue : .env + SQLite exclus, zéro secret dans l'historique poussé
+- Recommandation transmise : token à régénérer s'il a été partagé ailleurs ; repo actuellement PUBLIC (proposition de le passer en privé)
