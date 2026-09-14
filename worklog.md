@@ -184,3 +184,23 @@ Stage Summary:
 - SAUVEGARDE GITHUB OPÉRATIONNELLE : le code complet du Fantasy Coach est sur https://github.com/Golden-003/Fantasy
 - Sécurité maintenue : .env + SQLite exclus, zéro secret dans l'historique poussé
 - Recommandation transmise : token à régénérer s'il a été partagé ailleurs ; repo actuellement PUBLIC (proposition de le passer en privé)
+
+---
+Task ID: 8
+Agent: Main agent (Super Z)
+Task: « On va connecter a vercel » — préparation complète du projet pour le déploiement Vercel
+
+Work Log:
+- Audit déployabilité : z-ai-web-dev-sdk@0.0.18 DISPONIBLE sur le registre public npm (build Vercel OK) ; next.config output standalone compatible ; PrismaClient unique dans src/lib/db.ts
+- PROBLÈME STRUCTUREL identifié : SQLite = fichier disque → impossible sur Vercel (filesystem read-only serverless). Décision : migration vers PostgreSQL managé gratuit (Neon/Vercel Postgres)
+- prisma/schema.prisma : provider "sqlite" → "postgresql" (schéma vérifié 100% compatible : String/Int/Float/Boolean uniquement)
+- package.json : ajout "postinstall": "prisma generate" (génération client obligatoire au build Vercel)
+- assistant/route.ts : import statique ZAI → import dynamique dans le try (si le SDK échoue au chargement sur Vercel, le repli rule-based prend le relais au lieu de crasher la route)
+- Tests : bunx prisma generate ✓ ; DATABASE_URL factice + bun run build ✓ (10 routes compilées, 4 pages statiques, aucune erreur) ; eslint ✓
+- Commit 6d053bb poussé sur GitHub main
+- À faire à réception du token Vercel : vercel link → création DB Postgres (API Storage Vercel ou Neon) → DATABASE_URL env → prisma db push + re-seed réel (scripts/seed-sofascore.ts = source de vérité) → vercel --prod
+
+Stage Summary:
+- Le code est 100% prêt pour Vercel : build validé sans base locale, repli IA robuste, schéma PostgreSQL
+- La base SQLite locale (db/custom.db) reste utilisable jusqu'au basculement ; toutes les données réelles sont reconstituables par re-seed déterministe
+- Action utilisateur restante : créer un token Vercel (vercel.com → sign in GitHub → account/tokens)
